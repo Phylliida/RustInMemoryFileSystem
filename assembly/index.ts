@@ -2,7 +2,6 @@
 // ----------------- FILESYSTEM---------------------
 // -------------------------------------------------
 // Implementation of a unix filesystem in memory.
-import * as asyncify from "bindings/asyncify";
 
 "use strict";
 
@@ -53,9 +52,21 @@ interface Event {
     OnEvent: Function;
 }
 
-interface INodeData {
-    [key: number]: Uint8Array;
+interface ParentIDAndName {
+    parentid: number;
+    name: string;
 }
+
+function enumerateDict<T,V>(dict: Map<T,V>) : Array<object> {
+    var keys = dict.keys();
+    var out = [];
+    for (var i = 0; i < keys.length; i++) {
+        out.push([keys[i], dict.get(keys[i])]);
+    }
+    return out;
+}
+
+
 
 /**
  * @constructor
@@ -68,7 +79,7 @@ class FS{
     public events : Array<Event>;
     public storage : FileStorageInterface;
     public qidcounter : QIDCounter;
-    public inodedata : INodeData;
+    public inodedata : Map<number, Uint8Array>;
     public total_size : number;
     public used_size : number;
 
@@ -85,7 +96,7 @@ class FS{
 
         //this.tar = new TAR(this);
 
-        this.inodedata = {};
+        this.inodedata = new Map();
 
         this.total_size = 256 * 1024 * 1024 * 1024;
         this.used_size = 0;
@@ -115,12 +126,16 @@ class FS{
     
         state[0] = this.inodes;
         state[1] = this.qidcounter.last_qidnumber;
-        state[2] = [] as Array<Array<number | Uint8Array>>;
-        for(const [id, data] of Object.entries(this.inodedata))
+        state[2] = [] as Array<Array<any>>;
+        var dictValues = enumerateDict(this.inodedata);
+        for(var i = 0; i < dictValues.length; i++)
         {
+            var items = dictValues[i] as Array<any>;
+            var id = items[0] as number;
+            var data = items[1] as Uint8Array;
             if((this.inodes[id].mode & S_IFDIR) === 0)
             {
-                state[2].push([id, data] as Array<number | Uint8Array>);
+                state[2].push([id, data] as Array<any>);
             }
         }
         state[3] = this.total_size;
@@ -133,16 +148,19 @@ class FS{
     public set_state(state : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | FSMountInfo>) {
         this.inodes = state[0].map(state => { const inode = new Inode(0); inode.set_state(state); return inode; });
         this.qidcounter.last_qidnumber = state[1] as number;
-        this.inodedata = {};
-        for(let [key, value] of state[2])
-        {
+        this.inodedata = new Map();
+        var state2Arr : Array<Array<any>> = state[2] as Array<Array<any>>;
+        for (var i = 0; i < state2Arr.length; i++) {
+            var item = state2Arr[i] as Array<any>;
+            var key = item[0] as number;
+            var value = item[1] as Uint8Array;
             if(value.buffer.byteLength !== value.byteLength)
             {
                 // make a copy if we didn't get one
                 value = value.slice();
             }
     
-            this.inodedata[key] = value;
+            this.inodedata.set(key, value);
         }
         this.total_size = state[3] as number;
         this.used_size = state[4] as number;
@@ -399,8 +417,12 @@ class FS{
         // Update children
         if(this.IsDirectory(old_idx) && !this.is_forwarder(old_inode))
         {
-            for(const [name, child_id] of new_inode.direntries)
+            var dictValues = enumerateDict(new_inode.direntries);
+            for(var i = 0; i < dictValues.length; i++)
             {
+                var items = dictValues[i] as Array<any>;
+                var name = items[0] as string;
+                var child_id = items[1] as number;    
                 if(name === "." || name === "..") continue;
                 if(this.IsDirectory(child_id))
                 {
@@ -410,8 +432,8 @@ class FS{
         }
 
         // Relocate local data if any.
-        this.inodedata[idx] = this.inodedata[old_idx];
-        delete this.inodedata[old_idx];
+        this.inodedata.set(idx, this.inodedata.get(old_idx));
+        this.inodedata.delete(old_idx);
 
         // Retire old reference information.
         old_inode.direntries = new Map();
@@ -531,8 +553,7 @@ class FS{
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = await
-                this.follow_fs(parent_inode).CreateTextFile(filename, foreign_parentid, str);
+            const foreign_id = this.follow_fs(parent_inode).CreateTextFile(filename, foreign_parentid, str);
             return this.create_forwarder(parent_inode.mount_id, foreign_id);
         }
         var id = this.CreateFile(filename, parentid);
@@ -542,27 +563,26 @@ class FS{
         for(var j = 0; j < str.length; j++) {
             data[j] = str.charCodeAt(j);
         }
-        await this.set_data(id, data);
+        this.set_data(id, data);
         return id;
     }
 
     /**
      * @param {Uint8Array} buffer
      */
-    public async CreateBinaryFile(filename : string, parentid : number, buffer : Uint8Array) : number {
+    public CreateBinaryFile(filename : string, parentid : number, buffer : Uint8Array) : number {
         const parent_inode = this.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = await
-                this.follow_fs(parent_inode).CreateBinaryFile(filename, foreign_parentid, buffer);
+            const foreign_id = this.follow_fs(parent_inode).CreateBinaryFile(filename, foreign_parentid, buffer);
             return this.create_forwarder(parent_inode.mount_id, foreign_id);
         }
         var id = this.CreateFile(filename, parentid);
         var x = this.inodes[id];
         var data = new Uint8Array(buffer.length);
         data.set(buffer);
-        await this.set_data(id, data);
+        this.set_data(id, data);
         x.size = buffer.length;
         return id;
     }
@@ -590,12 +610,12 @@ class FS{
         return true;
     }
 
-    public async CloseInode(id : number) : Promise {
+    public CloseInode(id : number) : void {
         //message.Debug("close: " + this.GetFullPath(id));
         var inode = this.inodes[id];
         if(this.is_forwarder(inode))
         {
-            return await this.follow_fs(inode).CloseInode(inode.foreign_id);
+            return this.follow_fs(inode).CloseInode(inode.foreign_id);
         }
         if(inode.status === STATUS_ON_STORAGE)
         {
@@ -604,14 +624,14 @@ class FS{
         if(inode.status === STATUS_UNLINKED) {
             //message.Debug("Filesystem: Delete unlinked file");
             inode.status = STATUS_INVALID;
-            await this.DeleteData(id);
+            this.DeleteData(id);
         }
     }
 
     /**
      * @return {!Promise<number>} 0 if success, or -errno if failured.
      */
-    public async Rename(olddirid: number, oldname: string, newdirid: number, newname: string) : Promise<number> {
+    public Rename(olddirid: number, oldname: string, newdirid: number, newname: string) : number {
         // message.Debug("Rename " + oldname + " to " + newname);
         if((olddirid === newdirid) && (oldname === newname)) {
             return 0;
@@ -649,8 +669,7 @@ class FS{
         {
             // Move inode within the same child filesystem.
 
-            const ret = await
-                this.follow_fs(olddir).Rename(olddir.foreign_id, oldname, newdir.foreign_id, newname);
+            const ret = this.follow_fs(olddir).Rename(olddir.foreign_id, oldname, newdir.foreign_id, newname);
 
             if(ret < 0) return ret;
         }
@@ -677,7 +696,7 @@ class FS{
             const diverted_old_idx = this.divert(olddirid, oldname);
             const old_real_inode = this.GetInode(idx);
 
-            const data = await this.Read(diverted_old_idx, 0, old_real_inode.size);
+            const data = this.Read(diverted_old_idx, 0, old_real_inode.size);
 
             if(this.is_forwarder(newdir))
             {
@@ -704,24 +723,26 @@ class FS{
             }
 
             // Rewrite data to newly created destination.
-            await this.ChangeSize(idx, old_real_inode.size);
+            this.ChangeSize(idx, old_real_inode.size);
             if(data && data.length)
             {
-                await this.Write(idx, 0, data.length, data);
+                this.Write(idx, 0, data.length, data);
             }
 
             // Move children to newly created destination.
             if(this.IsDirectory(idx))
             {
-                for(const child_filename of this.GetChildren(diverted_old_idx))
+                var childrenData = this.GetChildren(diverted_old_idx);
+                for(var i = 0; i < childrenData.length; i++)
                 {
-                    const ret = await this.Rename(diverted_old_idx, child_filename, idx, child_filename);
+                    var child_filename = childrenData[i];
+                    const ret = this.Rename(diverted_old_idx, child_filename, idx, child_filename);
                     if(ret < 0) return ret;
                 }
             }
 
             // Perform destructive changes only after migration succeeded.
-            await this.DeleteData(diverted_old_idx);
+            this.DeleteData(diverted_old_idx);
             const ret = this.Unlink(olddirid, oldname);
             if(ret < 0) return ret;
         }
@@ -731,23 +752,23 @@ class FS{
         return 0;
     }
 
-    public async Write(id : number, offset : number, count : number, buffer : Uint8Array) : Promise<void>{
+    public Write(id : number, offset : number, count : number, buffer : Uint8Array) : void {
         this.NotifyListeners(id, "write");
         var inode = this.inodes[id];
 
         if(this.is_forwarder(inode))
         {
             const foreign_id = inode.foreign_id;
-            await this.follow_fs(inode).Write(foreign_id, offset, count, buffer);
+            this.follow_fs(inode).Write(foreign_id, offset, count, buffer);
             return;
         }
 
-        var data = await this.get_buffer(id);
+        var data = this.get_buffer(id);
 
         if(!data || data.length < (offset+count)) {
-            await this.ChangeSize(id, Math.floor(((offset+count)*3)/2));
+            this.ChangeSize(id, Math.floor(((offset+count)*3)/2));
             inode.size = offset + count;
-            data = await this.get_buffer(id);
+            data = this.get_buffer(id);
         } else
         if(inode.size < (offset+count)) {
             inode.size = offset + count;
@@ -756,18 +777,18 @@ class FS{
         {
             data.set(buffer.subarray(0, count), offset);
         }
-        await this.set_data(id, data);
+        this.set_data(id, data);
     }
 
-    public async Read(inodeid : number, offset : number, count : number) : Promise<Uint8Array> {
+    public Read(inodeid : number, offset : number, count : number) : Uint8Array {
         const inode = this.inodes[inodeid];
         if(this.is_forwarder(inode))
         {
             const foreign_id = inode.foreign_id;
-            return await this.follow_fs(inode).Read(foreign_id, offset, count);
+            return this.follow_fs(inode).Read(foreign_id, offset, count);
         }
 
-        return await this.get_data(inodeid, offset, count);
+        return this.get_data(inodeid, offset, count);
     }
 
     public Search(parentid : number, name : string) : number {
@@ -787,8 +808,10 @@ class FS{
 
     public CountUsedInodes() : number {
         let count = this.inodes.length;
-        for(const { fs, backtrack } of this.mounts)
+        for(var i = 0; i < this.mounts.length; i++)
         {
+            var fs = this.mounts[i].fs;
+            var backtrack = this.mounts[i].backtrack;
             count += fs.CountUsedInodes();
 
             // Forwarder inodes don't count.
@@ -799,8 +822,9 @@ class FS{
 
     public CountFreeInodes() : number {
         let count = 1024 * 1024;
-        for(const { fs } of this.mounts)
+        for(var i = 0; i < this.mounts.length; i++)
         {
+            var fs = this.mounts[i].fs;
             count += fs.CountFreeInodes();
         }
         return count;
@@ -808,8 +832,9 @@ class FS{
 
     public GetTotalSize() : number {
         let size = this.used_size;
-        for(const { fs } of this.mounts)
+        for(var i = 0; i < this.mounts.length; i++)
         {
+            var fs = this.mounts[i].fs;    
             size += fs.GetTotalSize();
         }
         return size;
@@ -823,8 +848,9 @@ class FS{
 
     public GetSpace() : number {
         let size = this.total_size;
-        for(const { fs } of this.mounts)
+        for(var i = 0; i < this.mounts.length; i++)
         {
+            var fs = this.mounts[i].fs;
             size += fs.GetSpace();
         }
         return this.total_size;
@@ -845,10 +871,13 @@ class FS{
 
         // Root directory.
         if(!parent_inode) return "";
-
-        for(const [name, childid] of parent_inode.direntries)
+        var dictValues = enumerateDict(parent_inode.direntries);
+        for(var i = 0; i < dictValues.length; i++)
         {
-            if(childid === idx) return name;
+            var items = dictValues[i] as Array<any>;
+            var name = items[0] as string;
+            var child_id = items[1] as number;    
+            if(child_id === idx) return name;
         }
 
         dbg_assert(false, "Filesystem: Found directory inode whose parent doesn't link to it");
@@ -940,11 +969,11 @@ class FS{
         return 0;
     }
 
-    public async DeleteData(idx : number) : Promise<void> {
+    public DeleteData(idx : number) : void {
         const inode = this.inodes[idx];
         if(this.is_forwarder(inode))
         {
-            await this.follow_fs(inode).DeleteData(inode.foreign_id);
+            this.follow_fs(inode).DeleteData(inode.foreign_id);
             return;
         }
         inode.size = 0;
@@ -958,7 +987,7 @@ class FS{
      *      than the data itself. To ensure that any modifications done to this buffer is reflected
      *      to the file, call set_data with the modified buffer.
      */
-    public async get_buffer(idx : number) : Promise<Uint8Array> {
+    public get_buffer(idx : number) : Uint8Array {
         const inode = this.inodes[idx];
         dbg_assert(inode, `Filesystem get_buffer: idx ${idx} does not point to an inode`);
 
@@ -969,7 +998,7 @@ class FS{
         else if(inode.status === STATUS_ON_STORAGE)
         {
             dbg_assert(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
-            return await this.storage.read(inode.sha256sum, 0, inode.size);
+            return this.storage.read(inode.sha256sum, 0, inode.size);
         }
         else
         {
@@ -984,7 +1013,7 @@ class FS{
      * @param {number} count
      * @return {!Promise<Uint8Array>}
      */
-    public async get_data(idx : number, offset : number, count : number) : Promise<Uint8Array> {
+    public get_data(idx : number, offset : number, count : number) : Uint8Array {
         const inode = this.inodes[idx];
         dbg_assert(inode, `Filesystem get_data: idx ${idx} does not point to an inode`);
 
@@ -995,7 +1024,7 @@ class FS{
         else if(inode.status === STATUS_ON_STORAGE)
         {
             dbg_assert(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
-            return await this.storage.read(inode.sha256sum, offset, count);
+            return this.storage.read(inode.sha256sum, offset, count);
         }
         else
         {
@@ -1008,7 +1037,7 @@ class FS{
      * @param {number} idx
      * @param {Uint8Array} buffer
      */
-    public async set_data(idx : number, buffer : UInt8Array) : Promise<void> {
+    public set_data(idx : number, buffer : UInt8Array) : void {
         // Current scheme: Save all modified buffers into local inodedata.
         this.inodedata[idx] = buffer;
         if(this.inodes[idx].status === STATUS_ON_STORAGE)
@@ -1035,9 +1064,9 @@ class FS{
         return inode;
     }
 
-    public async ChangeSize(idx : number, newsize : number) : Promise<void> {
+    public ChangeSize(idx : number, newsize : number) : void {
         var inode = this.GetInode(idx);
-        var temp = await this.get_data(idx, 0, inode.size);
+        var temp = this.get_data(idx, 0, inode.size);
         //message.Debug("change size to: " + newsize);
         if(newsize === inode.size) return;
         var data = new Uint8Array(newsize);
@@ -1047,7 +1076,7 @@ class FS{
             var size = Math.min(temp.length, inode.size);
             data.set(temp.subarray(0, size), 0);
         }
-        await this.set_data(idx, data);
+        this.set_data(idx, data);
     }
 
     public SearchPath(path : string) : object {
@@ -1081,7 +1110,7 @@ class FS{
      * @param {number} dirid
      * @param {Array<{parentid: number, name: string}>} list
      */
-    public GetRecursiveList(dirid : number, list : Array<{parentid: number, name: string}>) : void {
+    public GetRecursiveList(dirid : number, list : Array<ParentIDAndName>) : void {
         if(this.is_forwarder(this.inodes[dirid]))
         {
             const foreign_fs = this.follow_fs(this.inodes[dirid]);
@@ -1095,12 +1124,17 @@ class FS{
                 list[i].parentid = this.get_forwarder(mount_id, list[i].parentid);
             }
             return;
+        
         }
-        for(const [name, id] of this.inodes[dirid].direntries)
+        var dictValues = enumerateDict(this.inodes[dirid].direntries);
+        for(var i = 0; i < dictValues.length; i++)
         {
+            var items = dictValues[i] as Array<any>;
+            var name = items[0] as string;
+            var id = items[1] as number;    
             if(name !== "." && name !== "..")
             {
-                list.push({ parentid: dirid, name });
+                list.push({ parentid: dirid, name: name });
                 if(this.IsDirectory(id))
                 {
                     this.GetRecursiveList(id, list);
@@ -1174,8 +1208,12 @@ class FS{
                 if(this.IsDirectory(i) && this.GetParent(i) < 0) {
                     message.Debug("Error in filesystem: negative parent id " + i);
                 }
-                for(const [name, id] of inode.direntries)
+                var dictValues = enumerateDict(inode.direntries);
+                for(var i = 0; i < dictValues.length; i++)
                 {
+                    var items = dictValues[i] as Array<any>;
+                    var name = items[0] as string;
+                    var id = items[1] as number;    
                     if(name.length === 0) {
                         message.Debug("Error in filesystem: inode with no name and id " + id);
                     }
@@ -1202,16 +1240,22 @@ class FS{
         }
 
         let size = 0;
-        for(const name of inode.direntries.keys())
+        var dirkeys = inode.direntries.keys();
+        for(var i = 0; i < dirkeys.length; i++)
         {
+            var name = dirkeys[i];
             size += 13 + 8 + 1 + 2 + texten.encode(name).length;
         }
         const data = this.inodedata[dirid] = new Uint8Array(size);
         inode.size = size;
 
         let offset = 0x0;
-        for([name, id] of inode.direntries)
+        var dictValues = enumerateDict(inode.direntries);
+        for(var i = 0; i < dictValues.length; i++)
         {
+            var items = dictValues[i] as Array<any>;
+            var name = items[0] as string;
+            var id = items[1] as number;    
             const child = this.GetInode(id);
             offset += marshall.Marshall(
                 ["Q", "d", "b", "s"],
@@ -1723,12 +1767,12 @@ class FS{
         return Array.from(dir.direntries.keys()).filter(path => path !== "." && path !== "..");
     }
 
-    public read_file(file : string) : Uint8Array {
+    public read_file(file : string) : Nullable<Uint8Array> {
         const p = this.SearchPath(file);
 
         if(p.id === -1)
         {
-            return Promise.resolve(null);
+            return null;
         }
 
         const inode = this.GetInode(p.id);
@@ -1855,8 +1899,12 @@ class INode {
         if((this.mode & S_IFMT) === S_IFDIR)
         {
             this.direntries = new Map();
-            for(const [name, entry] of (state[1] as Array<Array<string | number>>))
+            var dictValues = state[1] as Array<Array<any>>;
+            for(var i = 0; i < dictValues.length; i++)
             {
+                var items = dictValues[i] as Array<any>;
+                var name = items[0] as string;
+                var entry = items[1] as number;
                 this.direntries.set(name, entry);
             }
         }
