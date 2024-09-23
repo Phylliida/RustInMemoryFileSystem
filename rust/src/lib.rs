@@ -212,7 +212,6 @@ impl fmt::Debug for dyn FileStorageInterface {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct FS{
-
     inodes : Vec<INode>,
     #[serde(skip)]
     events : Vec<Event>,
@@ -222,13 +221,12 @@ struct FS{
     inodedata : INodeData,
     total_size : Number,
     used_size : Number,
-
     mounts : Vec<FSMountInfo>
 }
 
 impl FS {
     pub fn new(storage: Arc<dyn FileStorageInterface>, qidcounter : Option<QIDCounter>) -> FS {
-        let result = FS {
+        let mut result = FS {
             inodes : Vec::new(),
             events : Vec::new(),
 
@@ -252,21 +250,21 @@ impl FS {
 
             mounts : Vec::new(),
 
-            //RegisterMessage("LoadFilesystem", this.LoadFilesystem.bind(this) );
-            //RegisterMessage("MergeFile", this.MergeFile.bind(this) );
+            //RegisterMessage("LoadFilesystem", self.LoadFilesystem.bind(this) );
+            //RegisterMessage("MergeFile", self.MergeFile.bind(this) );
             //RegisterMessage("tar",
             //    function(data) {
-            //        SendToMaster("tar", this.tar.Pack(data));
+            //        SendToMaster("tar", self.tar.Pack(data));
             //    }.bind(this)
             //);
             //RegisterMessage("sync",
             //    function(data) {
-            //        SendToMaster("sync", this.tar.Pack(data));
+            //        SendToMaster("sync", self.tar.Pack(data));
             //    }.bind(this)
             //);
         };
 
-        //result.CreateDirectory("", -1);
+        result.CreateDirectory("".to_owned(), -1);
 
         result
     }
@@ -275,8 +273,8 @@ impl FS {
     public get_state() : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | Uint8Array | FSMountInfo> {
         var state : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | Uint8Array | FSMountInfo> = [];
     
-        state[0] = this.inodes;
-        state[1] = this.qidcounter.last_qidnumber;
+        state[0] = self.inodes;
+        state[1] = self.qidcounter.last_qidnumber;
         state[2] = [] as Array<Array<number | Uint8Array>>;
         for(const [id, data] of Object.entries(this.inodedata))
         {
@@ -285,17 +283,17 @@ impl FS {
                 state[2].push([id, data] as Array<number | Uint8Array>);
             }
         }
-        state[3] = this.total_size;
-        state[4] = this.used_size;
+        state[3] = self.total_size;
+        state[4] = self.used_size;
         state = state.concat(this.mounts);
     
         return state;
     }
 
     public set_state(state : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | FSMountInfo>) {
-        this.inodes = state[0].map(state => { const inode = new Inode(0); inode.set_state(state); return inode; });
-        this.qidcounter.last_qidnumber = state[1] as number;
-        this.inodedata = {};
+        self.inodes = state[0].map(state => { const inode = new Inode(0); inode.set_state(state); return inode; });
+        self.qidcounter.last_qidnumber = state[1] as number;
+        self.inodedata = {};
         for(let [key, value] of state[2])
         {
             if(value.buffer.byteLength !== value.byteLength)
@@ -304,47 +302,47 @@ impl FS {
                 value = value.slice();
             }
     
-            this.inodedata[key] = value;
+            self.inodedata[key] = value;
         }
-        this.total_size = state[3] as number;
-        this.used_size = state[4] as number;
-        this.mounts = state.slice(5) as Array<FSMountInfo>;
+        self.total_size = state[3] as number;
+        self.used_size = state[4] as number;
+        self.mounts = state.slice(5) as Array<FSMountInfo>;
     }
 
 
     // -----------------------------------------------------
 
     public AddEvent(id : number, OnEvent : Function) : void {
-        var inode = this.inodes[id];
+        var inode = self.inodes[id];
         if(inode.status === STATUS_OK || inode.status === STATUS_ON_STORAGE) {
             OnEvent();
         }
         else if(this.is_forwarder(inode))
         {
-            this.follow_fs(inode).AddEvent(inode.foreign_id, OnEvent);
+            self.follow_fs(inode).AddEvent(inode.foreign_id, OnEvent);
         }
         else
         {
-            this.events.push({id: id, OnEvent: OnEvent});
+            self.events.push({id: id, OnEvent: OnEvent});
         }
     }
 
     public HandleEvent(id : number) : void {
-        const inode = this.inodes[id];
+        const inode = self.inodes[id];
         if(this.is_forwarder(inode))
         {
-            this.follow_fs(inode).HandleEvent(inode.foreign_id);
+            self.follow_fs(inode).HandleEvent(inode.foreign_id);
         }
-        //message.Debug("number of events: " + this.events.length);
+        //message.Debug("number of events: " + self.events.length);
         var newevents = [];
         for(var i=0; i<this.events.length; i++) {
             if(this.events[i].id === id) {
-                this.events[i].OnEvent();
+                self.events[i].OnEvent();
             } else {
                 newevents.push(this.events[i]);
             }
         }
-        this.events = newevents;
+        self.events = newevents;
     }
 
     public load_from_json(fs : Map<string, any>) : void {
@@ -357,20 +355,20 @@ impl FS {
         }
 
         var fsroot = fs.get("fsroot");
-        this.used_size = fs.get("size");
+        self.used_size = fs.get("size");
 
         for(var i = 0; i < fsroot.length; i++) {
-            this.LoadRecursive(fsroot[i], 0);
+            self.LoadRecursive(fsroot[i], 0);
         }
 
         //if(DEBUG)
         //{
-        //    this.Check();
+        //    self.Check();
         //}
     }
 
     public LoadRecursive(data : Map<string, any>, parentid : number) : void {
-        var inode = this.CreateInode();
+        var inode = self.CreateInode();
 
         const name = data.get(JSONFS_IDX_NAME);
         inode.size = data.get(JSONFS_IDX_SIZE);
@@ -385,20 +383,20 @@ impl FS {
 
         if(ifmt === S_IFDIR)
         {
-            this.PushInode(inode, parentid, name);
-            this.LoadDir(this.inodes.length - 1, data.get(JSONFS_IDX_TARGET));
+            self.PushInode(inode, parentid, name);
+            self.LoadDir(this.inodes.length - 1, data.get(JSONFS_IDX_TARGET));
         }
         else if(ifmt === S_IFREG)
         {
             inode.status = STATUS_ON_STORAGE;
             inode.sha256sum = data.get(JSONFS_IDX_SHA256);
             dbg_assert(inode.sha256sum);
-            this.PushInode(inode, parentid, name);
+            self.PushInode(inode, parentid, name);
         }
         else if(ifmt === S_IFLNK)
         {
             inode.symlink = data.get(JSONFS_IDX_TARGET);
-            this.PushInode(inode, parentid, name);
+            self.PushInode(inode, parentid, name);
         }
         else if(ifmt === S_IFSOCK)
         {
@@ -412,7 +410,7 @@ impl FS {
 
     public LoadDir(parentid : number, children : Array<Map<string, any>>) : void {
         for(var i = 0; i < children.length; i++) {
-            this.LoadRecursive(children[i], parentid);
+            self.LoadRecursive(children[i], parentid);
         }
     }
 
@@ -437,8 +435,8 @@ impl FS {
      * @param {string} name
      */
     public link_under_dir(parentid : number, idx : number, name : string) : void {
-        const inode = this.inodes[idx];
-        const parent_inode = this.inodes[parentid];
+        const inode = self.inodes[idx];
+        const parent_inode = self.inodes[parentid];
 
         dbg_assert(!this.is_forwarder(parent_inode),
             "Filesystem: Shouldn't link under fowarder parents");
@@ -473,9 +471,9 @@ impl FS {
      * @param {string} name
      */
     public unlink_from_dir(parentid : number, name : string) : void {
-        const idx = this.Search(parentid, name);
-        const inode = this.inodes[idx];
-        const parent_inode = this.inodes[parentid];
+        const idx = self.Search(parentid, name);
+        const inode = self.inodes[idx];
+        const parent_inode = self.inodes[parentid];
 
         dbg_assert(!this.is_forwarder(parent_inode), "Filesystem: Can't unlink from forwarders");
         dbg_assert(this.IsDirectory(parentid), "Filesystem: Can't unlink from non-directories");
@@ -504,13 +502,13 @@ impl FS {
 
     public PushInode(inode : number, parentid : number, name : string) : void {
         if(parentid !== -1) {
-            this.inodes.push(inode);
-            inode.fid = this.inodes.length - 1;
-            this.link_under_dir(parentid, inode.fid, name);
+            self.inodes.push(inode);
+            inode.fid = self.inodes.length - 1;
+            self.link_under_dir(parentid, inode.fid, name);
             return;
         } else {
             if(this.inodes.length === 0) { // if root directory
-                this.inodes.push(inode);
+                self.inodes.push(inode);
                 inode.direntries.set(".", 0);
                 inode.direntries.set("..", 0);
                 inode.nlinks = 2;
@@ -531,8 +529,8 @@ impl FS {
          * @return {number} New idx of diversion.
          */
     public divert(parentid : number, filename : string) : number {
-        const old_idx = this.Search(parentid, filename);
-        const old_inode = this.inodes[old_idx];
+        const old_idx = self.Search(parentid, filename);
+        const old_inode = self.inodes[old_idx];
         const new_inode = new Inode(-1);
 
         dbg_assert(old_inode, "Filesystem divert: name (" + filename + ") not found");
@@ -543,19 +541,19 @@ impl FS {
         // Shallow copy is alright.
         Object.assign(new_inode, old_inode);
 
-        const idx = this.inodes.length;
-        this.inodes.push(new_inode);
+        const idx = self.inodes.length;
+        self.inodes.push(new_inode);
         new_inode.fid = idx;
 
         // Relink references
         if(this.is_forwarder(old_inode))
         {
-            this.mounts[old_inode.mount_id].backtrack.set(old_inode.foreign_id, idx);
+            self.mounts[old_inode.mount_id].backtrack.set(old_inode.foreign_id, idx);
         }
         if(this.should_be_linked(old_inode))
         {
-            this.unlink_from_dir(parentid, filename);
-            this.link_under_dir(parentid, idx, filename);
+            self.unlink_from_dir(parentid, filename);
+            self.link_under_dir(parentid, idx, filename);
         }
 
         // Update children
@@ -566,14 +564,14 @@ impl FS {
                 if(name === "." || name === "..") continue;
                 if(this.IsDirectory(child_id))
                 {
-                    this.inodes[child_id].direntries.set("..", idx);
+                    self.inodes[child_id].direntries.set("..", idx);
                 }
             }
         }
 
         // Relocate local data if any.
-        this.inodedata[idx] = this.inodedata[old_idx];
-        delete this.inodedata[old_idx];
+        self.inodedata[idx] = self.inodedata[old_idx];
+        delete self.inodedata[old_idx];
 
         // Retire old reference information.
         old_inode.direntries = new Map();
@@ -606,105 +604,112 @@ impl FS {
         inode.atime = inode.ctime = inode.mtime = now;
         return inode;
     }
-
+    */
 
     // Note: parentid = -1 for initial root directory.
-    public CreateDirectory(name: string, parentid: number) : number {
-        const parent_inode = this.inodes[parentid];
-        if(parentid >= 0 && this.is_forwarder(parent_inode))
-        {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = this.follow_fs(parent_inode).CreateDirectory(name, foreign_parentid);
-            return this.create_forwarder(parent_inode.mount_id, foreign_id);
+    pub fn CreateDirectory(&mut self, name: String, parentid: i32) -> i32 {
+        let as_usize = usize::try_from(parentid);
+        if as_usize.is_ok() {
+            let parentid_as_usize = as_usize.unwrap();
+            let parent_inode = self.inodes[parentid_as_usize];
+            if FS::is_forwarder(parent_inode)
+            {
+                let foreign_parentid = parent_inode.foreign_id;
+                let foreign_id = self.follow_fs(parent_inode).CreateDirectory(name, foreign_parentid);
+                return self.create_forwarder(parent_inode.mount_id, foreign_id);
+            }
         }
-        var x = this.CreateInode();
+        
+        let x = self.CreateInode();
         x.mode = 0x01FF | S_IFDIR;
-        if(parentid >= 0) {
-            x.uid = this.inodes[parentid].uid;
-            x.gid = this.inodes[parentid].gid;
-            x.mode = (this.inodes[parentid].mode & 0x1FF) | S_IFDIR;
+        if as_usize.is_ok() {
+            let parentid_as_usize = as_usize.unwrap();
+            x.uid = self.inodes[parentid_as_usize].uid;
+            x.gid = self.inodes[parentid_as_usize].gid;
+            x.mode = (self.inodes[parentid_as_usize].mode & 0x1FF) | S_IFDIR;
         }
-        x.qid.type = S_IFDIR >> 8;
-        this.PushInode(x, parentid, name);
-        this.NotifyListeners(this.inodes.length-1, "newdir");
-        return this.inodes.length-1;
+        x.qid.r#type = S_IFDIR >> 8;
+        self.PushInode(x, parentid, name);
+        self.NotifyListeners(self.inodes.len()-1, "newdir");
+        return self.inodes.len()-1;
     }
+    /*
 
     public CreateFile(filename : string, parentid : number) : number {
-        const parent_inode = this.inodes[parentid];
+        const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = this.follow_fs(parent_inode).CreateFile(filename, foreign_parentid);
-            return this.create_forwarder(parent_inode.mount_id, foreign_id);
+            const foreign_id = self.follow_fs(parent_inode).CreateFile(filename, foreign_parentid);
+            return self.create_forwarder(parent_inode.mount_id, foreign_id);
         }
-        var x = this.CreateInode();
-        x.uid = this.inodes[parentid].uid;
-        x.gid = this.inodes[parentid].gid;
-        x.qid.type = S_IFREG >> 8;
+        var x = self.CreateInode();
+        x.uid = self.inodes[parentid].uid;
+        x.gid = self.inodes[parentid].gid;
+        x.qid.r#type = S_IFREG >> 8;
         x.mode = (this.inodes[parentid].mode & 0x1B6) | S_IFREG;
-        this.PushInode(x, parentid, filename);
-        this.NotifyListeners(this.inodes.length-1, "newfile");
-        return this.inodes.length-1;
+        self.PushInode(x, parentid, filename);
+        self.NotifyListeners(this.inodes.length-1, "newfile");
+        return self.inodes.length-1;
     }
 
 
     public CreateNode(filename: string, parentid: number, major: number, minor: number) : number {
-        const parent_inode = this.inodes[parentid];
+        const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
             const foreign_id =
-                this.follow_fs(parent_inode).CreateNode(filename, foreign_parentid, major, minor);
-            return this.create_forwarder(parent_inode.mount_id, foreign_id);
+                self.follow_fs(parent_inode).CreateNode(filename, foreign_parentid, major, minor);
+            return self.create_forwarder(parent_inode.mount_id, foreign_id);
         }
-        var x = this.CreateInode();
+        var x = self.CreateInode();
         x.major = major;
         x.minor = minor;
-        x.uid = this.inodes[parentid].uid;
-        x.gid = this.inodes[parentid].gid;
-        x.qid.type = S_IFSOCK >> 8;
+        x.uid = self.inodes[parentid].uid;
+        x.gid = self.inodes[parentid].gid;
+        x.qid.r#type = S_IFSOCK >> 8;
         x.mode = (this.inodes[parentid].mode & 0x1B6);
-        this.PushInode(x, parentid, filename);
-        return this.inodes.length-1;
+        self.PushInode(x, parentid, filename);
+        return self.inodes.length-1;
     }
 
     public CreateSymlink(filename : string, parentid: number, symlink : string) : number {
-        const parent_inode = this.inodes[parentid];
+        const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
             const foreign_id =
-                this.follow_fs(parent_inode).CreateSymlink(filename, foreign_parentid, symlink);
-            return this.create_forwarder(parent_inode.mount_id, foreign_id);
+                self.follow_fs(parent_inode).CreateSymlink(filename, foreign_parentid, symlink);
+            return self.create_forwarder(parent_inode.mount_id, foreign_id);
         }
-        var x = this.CreateInode();
-        x.uid = this.inodes[parentid].uid;
-        x.gid = this.inodes[parentid].gid;
-        x.qid.type = S_IFLNK >> 8;
+        var x = self.CreateInode();
+        x.uid = self.inodes[parentid].uid;
+        x.gid = self.inodes[parentid].gid;
+        x.qid.r#type = S_IFLNK >> 8;
         x.symlink = symlink;
         x.mode = S_IFLNK;
-        this.PushInode(x, parentid, filename);
-        return this.inodes.length-1;
+        self.PushInode(x, parentid, filename);
+        return self.inodes.length-1;
     }
 
     public CreateTextFile(filename : string, parentid : number, str : string) : number {
-        const parent_inode = this.inodes[parentid];
+        const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
             const foreign_id = await
-                this.follow_fs(parent_inode).CreateTextFile(filename, foreign_parentid, str);
-            return this.create_forwarder(parent_inode.mount_id, foreign_id);
+                self.follow_fs(parent_inode).CreateTextFile(filename, foreign_parentid, str);
+            return self.create_forwarder(parent_inode.mount_id, foreign_id);
         }
-        var id = this.CreateFile(filename, parentid);
-        var x = this.inodes[id];
+        var id = self.CreateFile(filename, parentid);
+        var x = self.inodes[id];
         var data = new Uint8Array(str.length);
         x.size = str.length;
         for(var j = 0; j < str.length; j++) {
             data[j] = str.charCodeAt(j);
         }
-        await this.set_data(id, data);
+        await self.set_data(id, data);
         return id;
     }
 
@@ -712,32 +717,32 @@ impl FS {
      * @param {Uint8Array} buffer
      */
     public async CreateBinaryFile(filename : string, parentid : number, buffer : Uint8Array) : number {
-        const parent_inode = this.inodes[parentid];
+        const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
             const foreign_id = await
-                this.follow_fs(parent_inode).CreateBinaryFile(filename, foreign_parentid, buffer);
-            return this.create_forwarder(parent_inode.mount_id, foreign_id);
+                self.follow_fs(parent_inode).CreateBinaryFile(filename, foreign_parentid, buffer);
+            return self.create_forwarder(parent_inode.mount_id, foreign_id);
         }
-        var id = this.CreateFile(filename, parentid);
-        var x = this.inodes[id];
+        var id = self.CreateFile(filename, parentid);
+        var x = self.inodes[id];
         var data = new Uint8Array(buffer.length);
         data.set(buffer);
-        await this.set_data(id, data);
+        await self.set_data(id, data);
         x.size = buffer.length;
         return id;
     }
 
 
     public OpenInode(id : number, mode : number) : boolean {
-        var inode = this.inodes[id];
+        var inode = self.inodes[id];
         if(this.is_forwarder(inode))
         {
-            return this.follow_fs(inode).OpenInode(inode.foreign_id, mode);
+            return self.follow_fs(inode).OpenInode(inode.foreign_id, mode);
         }
         if((inode.mode&S_IFMT) === S_IFDIR) {
-            this.FillDirectory(id);
+            self.FillDirectory(id);
         }
         /*
         var type = "";
@@ -748,25 +753,25 @@ impl FS {
             case S_IFCHR: type = "Character Device"; break;
         }
         */
-        //message.Debug("open:" + this.GetFullPath(id) +  " type: " + inode.mode + " status:" + inode.status);
+        //message.Debug("open:" + self.GetFullPath(id) +  " type: " + inode.mode + " status:" + inode.status);
         return true;
     }
 
     public async CloseInode(id : number) : Promise {
-        //message.Debug("close: " + this.GetFullPath(id));
-        var inode = this.inodes[id];
+        //message.Debug("close: " + self.GetFullPath(id));
+        var inode = self.inodes[id];
         if(this.is_forwarder(inode))
         {
-            return await this.follow_fs(inode).CloseInode(inode.foreign_id);
+            return await self.follow_fs(inode).CloseInode(inode.foreign_id);
         }
         if(inode.status === STATUS_ON_STORAGE)
         {
-            this.storage.uncache(inode.sha256sum);
+            self.storage.uncache(inode.sha256sum);
         }
         if(inode.status === STATUS_UNLINKED) {
             //message.Debug("Filesystem: Delete unlinked file");
             inode.status = STATUS_INVALID;
-            await this.DeleteData(id);
+            await self.DeleteData(id);
         }
     }
 
@@ -778,32 +783,32 @@ impl FS {
         if((olddirid === newdirid) && (oldname === newname)) {
             return 0;
         }
-        var oldid = this.Search(olddirid, oldname);
+        var oldid = self.Search(olddirid, oldname);
         if(oldid === -1)
         {
             return -ENOENT;
         }
 
         // For event notification near end of method.
-        var oldpath = this.GetFullPath(olddirid) + "/" + oldname;
+        var oldpath = self.GetFullPath(olddirid) + "/" + oldname;
 
-        var newid = this.Search(newdirid, newname);
+        var newid = self.Search(newdirid, newname);
         if(newid !== -1) {
-            const ret = this.Unlink(newdirid, newname);
+            const ret = self.Unlink(newdirid, newname);
             if(ret < 0) return ret;
         }
 
         var idx = oldid; // idx contains the id which we want to rename
-        var inode = this.inodes[idx];
-        const olddir = this.inodes[olddirid];
-        const newdir = this.inodes[newdirid];
+        var inode = self.inodes[idx];
+        const olddir = self.inodes[olddirid];
+        const newdir = self.inodes[newdirid];
 
         if(!this.is_forwarder(olddir) && !this.is_forwarder(newdir))
         {
             // Move inode within current filesystem.
 
-            this.unlink_from_dir(olddirid, oldname);
-            this.link_under_dir(newdirid, idx, newname);
+            self.unlink_from_dir(olddirid, oldname);
+            self.link_under_dir(newdirid, idx, newname);
 
             inode.qid.version++;
         }
@@ -812,7 +817,7 @@ impl FS {
             // Move inode within the same child filesystem.
 
             const ret = await
-                this.follow_fs(olddir).Rename(olddir.foreign_id, oldname, newdir.foreign_id, newname);
+                self.follow_fs(olddir).Rename(olddir.foreign_id, oldname, newdir.foreign_id, newname);
 
             if(ret < 0) return ret;
         }
@@ -823,7 +828,7 @@ impl FS {
             dbg_log("XXX: Attempted to move mountpoint (" + oldname + ") - skipped", LOG_9P);
             return -EPERM;
         }
-        else if(!this.IsDirectory(idx) && this.GetInode(idx).nlinks > 1)
+        else if(!this.IsDirectory(idx) && self.GetInode(idx).nlinks > 1)
         {
             // Move hardlinked inode vertically in mount tree.
             dbg_log("XXX: Attempted to move hardlinked file (" + oldname + ") " +
@@ -836,80 +841,80 @@ impl FS {
 
             // Can't work with both old and new inode information without first diverting the old
             // information into a new idx value.
-            const diverted_old_idx = this.divert(olddirid, oldname);
-            const old_real_inode = this.GetInode(idx);
+            const diverted_old_idx = self.divert(olddirid, oldname);
+            const old_real_inode = self.GetInode(idx);
 
-            const data = await this.Read(diverted_old_idx, 0, old_real_inode.size);
+            const data = await self.Read(diverted_old_idx, 0, old_real_inode.size);
 
             if(this.is_forwarder(newdir))
             {
                 // Create new inode.
-                const foreign_fs = this.follow_fs(newdir);
-                const foreign_id = this.IsDirectory(diverted_old_idx) ?
+                const foreign_fs = self.follow_fs(newdir);
+                const foreign_id = self.IsDirectory(diverted_old_idx) ?
                     foreign_fs.CreateDirectory(newname, newdir.foreign_id) :
                     foreign_fs.CreateFile(newname, newdir.foreign_id);
 
                 const new_real_inode = foreign_fs.GetInode(foreign_id);
-                this.copy_inode(old_real_inode, new_real_inode);
+                self.copy_inode(old_real_inode, new_real_inode);
 
                 // Point to this new location.
-                this.set_forwarder(idx, newdir.mount_id, foreign_id);
+                self.set_forwarder(idx, newdir.mount_id, foreign_id);
             }
             else
             {
                 // Replace current forwarder with real inode.
-                this.delete_forwarder(inode);
-                this.copy_inode(old_real_inode, inode);
+                self.delete_forwarder(inode);
+                self.copy_inode(old_real_inode, inode);
 
                 // Link into new location in this filesystem.
-                this.link_under_dir(newdirid, idx, newname);
+                self.link_under_dir(newdirid, idx, newname);
             }
 
             // Rewrite data to newly created destination.
-            await this.ChangeSize(idx, old_real_inode.size);
+            await self.ChangeSize(idx, old_real_inode.size);
             if(data && data.length)
             {
-                await this.Write(idx, 0, data.length, data);
+                await self.Write(idx, 0, data.length, data);
             }
 
             // Move children to newly created destination.
             if(this.IsDirectory(idx))
             {
-                for(const child_filename of this.GetChildren(diverted_old_idx))
+                for(const child_filename of self.GetChildren(diverted_old_idx))
                 {
-                    const ret = await this.Rename(diverted_old_idx, child_filename, idx, child_filename);
+                    const ret = await self.Rename(diverted_old_idx, child_filename, idx, child_filename);
                     if(ret < 0) return ret;
                 }
             }
 
             // Perform destructive changes only after migration succeeded.
-            await this.DeleteData(diverted_old_idx);
-            const ret = this.Unlink(olddirid, oldname);
+            await self.DeleteData(diverted_old_idx);
+            const ret = self.Unlink(olddirid, oldname);
             if(ret < 0) return ret;
         }
 
-        this.NotifyListeners(idx, "rename", {oldpath: oldpath});
+        self.NotifyListeners(idx, "rename", {oldpath: oldpath});
 
         return 0;
     }
 
     public async Write(id : number, offset : number, count : number, buffer : Uint8Array) : Promise<void>{
-        this.NotifyListeners(id, "write");
-        var inode = this.inodes[id];
+        self.NotifyListeners(id, "write");
+        var inode = self.inodes[id];
 
         if(this.is_forwarder(inode))
         {
             const foreign_id = inode.foreign_id;
-            await this.follow_fs(inode).Write(foreign_id, offset, count, buffer);
+            await self.follow_fs(inode).Write(foreign_id, offset, count, buffer);
             return;
         }
 
-        var data = await this.get_buffer(id);
+        var data = await self.get_buffer(id);
 
         if(!data || data.length < (offset+count)) {
-            await this.ChangeSize(id, Math.floor(((offset+count)*3)/2));
+            await self.ChangeSize(id, Math.floor(((offset+count)*3)/2));
             inode.size = offset + count;
-            data = await this.get_buffer(id);
+            data = await self.get_buffer(id);
         } else
         if(inode.size < (offset+count)) {
             inode.size = offset + count;
@@ -918,29 +923,29 @@ impl FS {
         {
             data.set(buffer.subarray(0, count), offset);
         }
-        await this.set_data(id, data);
+        await self.set_data(id, data);
     }
 
     public async Read(inodeid : number, offset : number, count : number) : Promise<Uint8Array> {
-        const inode = this.inodes[inodeid];
+        const inode = self.inodes[inodeid];
         if(this.is_forwarder(inode))
         {
             const foreign_id = inode.foreign_id;
-            return await this.follow_fs(inode).Read(foreign_id, offset, count);
+            return await self.follow_fs(inode).Read(foreign_id, offset, count);
         }
 
-        return await this.get_data(inodeid, offset, count);
+        return await self.get_data(inodeid, offset, count);
     }
 
     public Search(parentid : number, name : string) : number {
-        const parent_inode = this.inodes[parentid];
+        const parent_inode = self.inodes[parentid];
 
         if(this.is_forwarder(parent_inode))
         {
             const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = this.follow_fs(parent_inode).Search(foreign_parentid, name);
+            const foreign_id = self.follow_fs(parent_inode).Search(foreign_parentid, name);
             if(foreign_id === -1) return -1;
-            return this.get_forwarder(parent_inode.mount_id, foreign_id);
+            return self.get_forwarder(parent_inode.mount_id, foreign_id);
         }
 
         const childid = parent_inode.direntries.get(name);
@@ -948,8 +953,8 @@ impl FS {
     }
 
     public CountUsedInodes() : number {
-        let count = this.inodes.length;
-        for(const { fs, backtrack } of this.mounts)
+        let count = self.inodes.length;
+        for(const { fs, backtrack } of self.mounts)
         {
             count += fs.CountUsedInodes();
 
@@ -961,7 +966,7 @@ impl FS {
 
     public CountFreeInodes() : number {
         let count = 1024 * 1024;
-        for(const { fs } of this.mounts)
+        for(const { fs } of self.mounts)
         {
             count += fs.CountFreeInodes();
         }
@@ -969,27 +974,27 @@ impl FS {
     }
 
     public GetTotalSize() : number {
-        let size = this.used_size;
-        for(const { fs } of this.mounts)
+        let size = self.used_size;
+        for(const { fs } of self.mounts)
         {
             size += fs.GetTotalSize();
         }
         return size;
         //var size = 0;
         //for(var i=0; i<this.inodes.length; i++) {
-        //    var d = this.inodes[i].data;
+        //    var d = self.inodes[i].data;
         //    size += d ? d.length : 0;
         //}
         //return size;
     }
 
     public GetSpace() : number {
-        let size = this.total_size;
-        for(const { fs } of this.mounts)
+        let size = self.total_size;
+        for(const { fs } of self.mounts)
         {
             size += fs.GetSpace();
         }
-        return this.total_size;
+        return self.total_size;
     }
 
     /**
@@ -998,11 +1003,11 @@ impl FS {
      * @return {string}
      */
     public GetDirectoryName(idx : number) : string {
-        const parent_inode = this.inodes[this.GetParent(idx)];
+        const parent_inode = self.inodes[this.GetParent(idx)];
 
         if(this.is_forwarder(parent_inode))
         {
-            return this.follow_fs(parent_inode).GetDirectoryName(this.inodes[idx].foreign_id);
+            return self.follow_fs(parent_inode).GetDirectoryName(this.inodes[idx].foreign_id);
         }
 
         // Root directory.
@@ -1023,8 +1028,8 @@ impl FS {
         var path = "";
 
         while(idx !== 0) {
-            path = "/" + this.GetDirectoryName(idx) + path;
-            idx = this.GetParent(idx);
+            path = "/" + self.GetDirectoryName(idx) + path;
+            idx = self.GetParent(idx);
         }
         return path.substring(1);
     }
@@ -1041,8 +1046,8 @@ impl FS {
             return -EPERM;
         }
 
-        const parent_inode = this.inodes[parentid];
-        const inode = this.inodes[targetid];
+        const parent_inode = self.inodes[parentid];
+        const inode = self.inodes[targetid];
 
         if(this.is_forwarder(parent_inode))
         {
@@ -1051,7 +1056,7 @@ impl FS {
                 dbg_log("XXX: Attempted to hardlink a file into a child filesystem - skipped", LOG_9P);
                 return -EPERM;
             }
-            return this.follow_fs(parent_inode).Link(parent_inode.foreign_id, inode.foreign_id, name);
+            return self.follow_fs(parent_inode).Link(parent_inode.foreign_id, inode.foreign_id, name);
         }
 
         if(this.is_forwarder(inode))
@@ -1060,7 +1065,7 @@ impl FS {
             return -EPERM;
         }
 
-        this.link_under_dir(parentid, targetid, name);
+        self.link_under_dir(parentid, targetid, name);
         return 0;
     }
 
@@ -1070,9 +1075,9 @@ impl FS {
             // Also guarantees that root cannot be deleted.
             return -EPERM;
         }
-        const idx = this.Search(parentid, name);
-        const inode = this.inodes[idx];
-        const parent_inode = this.inodes[parentid];
+        const idx = self.Search(parentid, name);
+        const inode = self.inodes[idx];
+        const parent_inode = self.inodes[parentid];
         //message.Debug("Unlink " + inode.name);
 
         // forward if necessary
@@ -1081,7 +1086,7 @@ impl FS {
             dbg_assert(this.is_forwarder(inode), "Children of forwarders should be forwarders");
 
             const foreign_parentid = parent_inode.foreign_id;
-            return this.follow_fs(parent_inode).Unlink(foreign_parentid, name);
+            return self.follow_fs(parent_inode).Unlink(foreign_parentid, name);
 
             // Keep the forwarder dangling - file is still accessible.
         }
@@ -1091,26 +1096,26 @@ impl FS {
             return -ENOTEMPTY;
         }
 
-        this.unlink_from_dir(parentid, name);
+        self.unlink_from_dir(parentid, name);
 
         if(inode.nlinks === 0)
         {
             // don't delete the content. The file is still accessible
             inode.status = STATUS_UNLINKED;
-            this.NotifyListeners(idx, "delete");
+            self.NotifyListeners(idx, "delete");
         }
         return 0;
     }
 
     public async DeleteData(idx : number) : Promise<void> {
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
         {
-            await this.follow_fs(inode).DeleteData(inode.foreign_id);
+            await self.follow_fs(inode).DeleteData(inode.foreign_id);
             return;
         }
         inode.size = 0;
-        delete this.inodedata[idx];
+        delete self.inodedata[idx];
     }
 
     /**
@@ -1121,17 +1126,17 @@ impl FS {
      *      to the file, call set_data with the modified buffer.
      */
     public async get_buffer(idx : number) : Promise<Uint8Array> {
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         dbg_assert(inode, `Filesystem get_buffer: idx ${idx} does not point to an inode`);
 
         if(this.inodedata[idx])
         {
-            return this.inodedata[idx];
+            return self.inodedata[idx];
         }
         else if(inode.status === STATUS_ON_STORAGE)
         {
             dbg_assert(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
-            return await this.storage.read(inode.sha256sum, 0, inode.size);
+            return await self.storage.read(inode.sha256sum, 0, inode.size);
         }
         else
         {
@@ -1147,17 +1152,17 @@ impl FS {
      * @return {!Promise<Uint8Array>}
      */
     public async get_data(idx : number, offset : number, count : number) : Promise<Uint8Array> {
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         dbg_assert(inode, `Filesystem get_data: idx ${idx} does not point to an inode`);
 
         if(this.inodedata[idx])
         {
-            return this.inodedata[idx].subarray(offset, offset + count);
+            return self.inodedata[idx].subarray(offset, offset + count);
         }
         else if(inode.status === STATUS_ON_STORAGE)
         {
             dbg_assert(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
-            return await this.storage.read(inode.sha256sum, offset, count);
+            return await self.storage.read(inode.sha256sum, offset, count);
         }
         else
         {
@@ -1172,11 +1177,11 @@ impl FS {
      */
     public async set_data(idx : number, buffer : UInt8Array) : Promise<void> {
         // Current scheme: Save all modified buffers into local inodedata.
-        this.inodedata[idx] = buffer;
+        self.inodedata[idx] = buffer;
         if(this.inodes[idx].status === STATUS_ON_STORAGE)
         {
-            this.inodes[idx].status = STATUS_OK;
-            this.storage.uncache(this.inodes[idx].sha256sum);
+            self.inodes[idx].status = STATUS_OK;
+            self.storage.uncache(this.inodes[idx].sha256sum);
         }
     }
 
@@ -1186,20 +1191,20 @@ impl FS {
      */
     public GetInode(idx : number) : INode {
         dbg_assert(!isNaN(idx), "Filesystem GetInode: NaN idx");
-        dbg_assert(idx >= 0 && idx < this.inodes.length, "Filesystem GetInode: out of range idx:" + idx);
+        dbg_assert(idx >= 0 && idx < self.inodes.length, "Filesystem GetInode: out of range idx:" + idx);
 
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
         {
-            return this.follow_fs(inode).GetInode(inode.foreign_id);
+            return self.follow_fs(inode).GetInode(inode.foreign_id);
         }
 
         return inode;
     }
 
     public async ChangeSize(idx : number, newsize : number) : Promise<void> {
-        var inode = this.GetInode(idx);
-        var temp = await this.get_data(idx, 0, inode.size);
+        var inode = self.GetInode(idx);
+        var temp = await self.get_data(idx, 0, inode.size);
         //message.Debug("change size to: " + newsize);
         if(newsize === inode.size) return;
         var data = new Uint8Array(newsize);
@@ -1209,7 +1214,7 @@ impl FS {
             var size = Math.min(temp.length, inode.size);
             data.set(temp.subarray(0, size), 0);
         }
-        await this.set_data(idx, data);
+        await self.set_data(idx, data);
     }
 
     public SearchPath(path : string) : object {
@@ -1225,8 +1230,8 @@ impl FS {
         let forward_path = null;
         for(var i=0; i<n; i++) {
             parentid = id;
-            id = this.Search(parentid, walk[i]);
-            if(!forward_path && this.is_forwarder(this.inodes[parentid]))
+            id = self.Search(parentid, walk[i]);
+            if(!forward_path && self.is_forwarder(this.inodes[parentid]))
             {
                 forward_path = "/" + walk.slice(i).join("/");
             }
@@ -1246,26 +1251,26 @@ impl FS {
     public GetRecursiveList(dirid : number, list : Array<{parentid: number, name: string}>) : void {
         if(this.is_forwarder(this.inodes[dirid]))
         {
-            const foreign_fs = this.follow_fs(this.inodes[dirid]);
-            const foreign_dirid = this.inodes[dirid].foreign_id;
-            const mount_id = this.inodes[dirid].mount_id;
+            const foreign_fs = self.follow_fs(this.inodes[dirid]);
+            const foreign_dirid = self.inodes[dirid].foreign_id;
+            const mount_id = self.inodes[dirid].mount_id;
 
             const foreign_start = list.length;
             foreign_fs.GetRecursiveList(foreign_dirid, list);
             for(let i = foreign_start; i < list.length; i++)
             {
-                list[i].parentid = this.get_forwarder(mount_id, list[i].parentid);
+                list[i].parentid = self.get_forwarder(mount_id, list[i].parentid);
             }
             return;
         }
-        for(const [name, id] of this.inodes[dirid].direntries)
+        for(const [name, id] of self.inodes[dirid].direntries)
         {
             if(name !== "." && name !== "..")
             {
                 list.push({ parentid: dirid, name });
                 if(this.IsDirectory(id))
                 {
-                    this.GetRecursiveList(id, list);
+                    self.GetRecursiveList(id, list);
                 }
             }
         }
@@ -1273,30 +1278,30 @@ impl FS {
 
     public RecursiveDelete(path : string) : void {
         var toDelete = [];
-        var ids = this.SearchPath(path);
+        var ids = self.SearchPath(path);
         if(ids.id === -1) return;
 
-        this.GetRecursiveList(ids.id, toDelete);
+        self.GetRecursiveList(ids.id, toDelete);
 
         for(var i=toDelete.length-1; i>=0; i--)
         {
-            const ret = this.Unlink(toDelete[i].parentid, toDelete[i].name);
+            const ret = self.Unlink(toDelete[i].parentid, toDelete[i].name);
             dbg_assert(ret === 0, "Filesystem RecursiveDelete failed at parent=" + toDelete[i].parentid +
                 ", name='" + toDelete[i].name + "' with error code: " + (-ret));
         }
     }
 
     public DeleteNode(path : string) : void {
-        var ids = this.SearchPath(path);
+        var ids = self.SearchPath(path);
         if(ids.id === -1) return;
 
         if((this.inodes[ids.id].mode&S_IFMT) === S_IFREG){
-            const ret = this.Unlink(ids.parentid, ids.name);
+            const ret = self.Unlink(ids.parentid, ids.name);
             dbg_assert(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
         }
         else if((this.inodes[ids.id].mode&S_IFMT) === S_IFDIR){
-            this.RecursiveDelete(path);
-            const ret = this.Unlink(ids.parentid, ids.name);
+            self.RecursiveDelete(path);
+            const ret = self.Unlink(ids.parentid, ids.name);
             dbg_assert(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
         }
     }
@@ -1306,11 +1311,11 @@ impl FS {
         //if(info==undefined)
         //    info = {};
 
-        //var path = this.GetFullPath(id);
+        //var path = self.GetFullPath(id);
         //if (this.watchFiles[path] === true && action=='write') {
         //  message.Send("WatchFileEvent", path);
         //}
-        //for (var directory of this.watchDirectories) {
+        //for (var directory of self.watchDirectories) {
         //    if (this.watchDirectories.hasOwnProperty(directory)) {
         //        var indexOf = path.indexOf(directory)
         //        if(indexOf === 0 || indexOf === 1)
@@ -1325,15 +1330,15 @@ impl FS {
         {
             if(this.inodes[i].status === STATUS_INVALID) continue;
 
-            var inode = this.GetInode(i);
+            var inode = self.GetInode(i);
             if(inode.nlinks < 0) {
                 message.Debug("Error in filesystem: negative nlinks=" + inode.nlinks + " at id =" + i);
             }
 
             if(this.IsDirectory(i))
             {
-                const inode = this.GetInode(i);
-                if(this.IsDirectory(i) && this.GetParent(i) < 0) {
+                const inode = self.GetInode(i);
+                if(this.IsDirectory(i) && self.GetParent(i) < 0) {
                     message.Debug("Error in filesystem: negative parent id " + i);
                 }
                 for(const [name, id] of inode.direntries)
@@ -1354,12 +1359,12 @@ impl FS {
 
 
     public FillDirectory(dirid: number) : void {
-        const inode = this.inodes[dirid];
+        const inode = self.inodes[dirid];
         if(this.is_forwarder(inode))
         {
             // XXX: The ".." of a mountpoint should point back to an inode in this fs.
             // Otherwise, ".." gets the wrong qid and mode.
-            this.follow_fs(inode).FillDirectory(inode.foreign_id);
+            self.follow_fs(inode).FillDirectory(inode.foreign_id);
             return;
         }
 
@@ -1368,13 +1373,13 @@ impl FS {
         {
             size += 13 + 8 + 1 + 2 + texten.encode(name).length;
         }
-        const data = this.inodedata[dirid] = new Uint8Array(size);
+        const data = self.inodedata[dirid] = new Uint8Array(size);
         inode.size = size;
 
         let offset = 0x0;
         for([name, id] of inode.direntries)
         {
-            const child = this.GetInode(id);
+            const child = self.GetInode(id);
             offset += marshall.Marshall(
                 ["Q", "d", "b", "s"],
                 [child.qid,
@@ -1386,7 +1391,7 @@ impl FS {
     }
 
     public RoundToDirentry(dirid: number, offset_target: number) : number {
-        const data = this.inodedata[dirid];
+        const data = self.inodedata[dirid];
         dbg_assert(data, `FS directory data for dirid=${dirid} should be generated`);
         dbg_assert(data.length, "FS directory should have at least an entry");
 
@@ -1411,10 +1416,10 @@ impl FS {
      * @return {boolean}
      */
     public IsDirectory(idx : number) : boolean {
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
         {
-            return this.follow_fs(inode).IsDirectory(inode.foreign_id);
+            return self.follow_fs(inode).IsDirectory(inode.foreign_id);
         }
         return (inode.mode & S_IFMT) === S_IFDIR;
     }
@@ -1424,10 +1429,10 @@ impl FS {
      * @return {boolean}
      */
     public IsEmpty(idx : number) : boolean {
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
         {
-            return this.follow_fs(inode).IsDirectory(inode.foreign_id);
+            return self.follow_fs(inode).IsDirectory(inode.foreign_id);
         }
         for(const name of inode.direntries.keys())
         {
@@ -1442,10 +1447,10 @@ impl FS {
      */
     public GetChildren(idx : number) : Array<string> {
         dbg_assert(this.IsDirectory(idx), "Filesystem: cannot get children of non-directory inode");
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
         {
-            return this.follow_fs(inode).GetChildren(inode.foreign_id);
+            return self.follow_fs(inode).GetChildren(inode.foreign_id);
         }
         const children = [];
         for(const name of inode.direntries.keys())
@@ -1465,7 +1470,7 @@ impl FS {
     public GetParent(idx : number) : number {
         dbg_assert(this.IsDirectory(idx), "Filesystem: cannot get parent of non-directory inode");
 
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
 
         if(this.should_be_linked(inode))
         {
@@ -1473,9 +1478,9 @@ impl FS {
         }
         else
         {
-            const foreign_dirid = this.follow_fs(inode).GetParent(inode.foreign_id);
+            const foreign_dirid = self.follow_fs(inode).GetParent(inode.foreign_id);
             dbg_assert(foreign_dirid !== -1, "Filesystem: should not have invalid parent ids");
-            return this.get_forwarder(inode.mount_id, foreign_dirid);
+            return self.get_forwarder(inode.mount_id, foreign_dirid);
         }
     }
 
@@ -1492,7 +1497,7 @@ impl FS {
     //   http://man7.org/linux/man-pages/man8/getcap.8.html
     //   http://man7.org/linux/man-pages/man3/libcap.3.html
     public PrepareCAPs(id : number) : number {
-        var inode = this.GetInode(id);
+        var inode = self.GetInode(id);
         if(inode.caps) return inode.caps.length;
         inode.caps = new Uint8Array(20);
         // format is little endian
@@ -1541,21 +1546,21 @@ impl FS {
      * @param {number} foreign_id Foreign idx of destination inode.
      */
     public set_forwarder(idx : number, mount_id : number, foreign_id : number) : void {
-        const inode = this.inodes[idx];
+        const inode = self.inodes[idx];
 
         dbg_assert(inode.nlinks === 0,
             "Filesystem: attempted to convert an inode into forwarder before unlinking the inode");
 
         if(this.is_forwarder(inode))
         {
-            this.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
+            self.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
         }
 
         inode.status = STATUS_FORWARDING;
         inode.mount_id = mount_id;
         inode.foreign_id = foreign_id;
 
-        this.mounts[mount_id].backtrack.set(foreign_id, idx);
+        self.mounts[mount_id].backtrack.set(foreign_id, idx);
     }
 
     /**
@@ -1565,25 +1570,25 @@ impl FS {
      * @return {number} Local idx of newly created forwarder.
      */
     public create_forwarder(mount_id : number, foreign_id : number) : number {
-        const inode = this.CreateInode();
+        const inode = self.CreateInode();
 
-        const idx = this.inodes.length;
-        this.inodes.push(inode);
+        const idx = self.inodes.length;
+        self.inodes.push(inode);
         inode.fid = idx;
 
-        this.set_forwarder(idx, mount_id, foreign_id);
+        self.set_forwarder(idx, mount_id, foreign_id);
         return idx;
     }
-
+    */
     /**
      * @private
      * @param {Inode} inode
      * @return {boolean}
      */
-    public is_forwarder(inode : INode) : boolean {
-        return inode.status === STATUS_FORWARDING;
+    pub fn is_forwarder(inode : INode) -> bool {
+        return inode.status == STATUS_FORWARDING;
     }
-
+    /*
     /**
      * Whether the inode it points to is a root of some filesystem.
      * @private
@@ -1591,7 +1596,7 @@ impl FS {
      * @return {boolean}
      */
     public is_a_root(idx : number) : boolean {
-        return this.GetInode(idx).fid === 0;
+        return self.GetInode(idx).fid === 0;
     }
 
     /**
@@ -1602,7 +1607,7 @@ impl FS {
      * @return {number} Local idx of a forwarder to described inode.
      */
     public get_forwarder(mount_id : number, foreign_id : number) : number {
-        const mount = this.mounts[mount_id];
+        const mount = self.mounts[mount_id];
 
         dbg_assert(foreign_id >= 0, "Filesystem get_forwarder: invalid foreign_id: " + foreign_id);
         dbg_assert(mount, "Filesystem get_forwarder: invalid mount number: " + mount_id);
@@ -1612,7 +1617,7 @@ impl FS {
         if(result === undefined)
         {
             // Create if not already exists.
-            return this.create_forwarder(mount_id, foreign_id);
+            return self.create_forwarder(mount_id, foreign_id);
         }
 
         return result;
@@ -1626,7 +1631,7 @@ impl FS {
         dbg_assert(this.is_forwarder(inode), "Filesystem delete_forwarder: expected forwarder");
 
         inode.status = STATUS_INVALID;
-        this.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
+        self.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
     }
 
     /**
@@ -1635,7 +1640,7 @@ impl FS {
      * @return {FS}
      */
     public follow_fs(inode : INode) : FS {
-        const mount = this.mounts[inode.mount_id];
+        const mount = self.mounts[inode.mount_id];
 
         dbg_assert(this.is_forwarder(inode),
             "Filesystem follow_fs: inode should be a forwarding inode");
@@ -1652,10 +1657,10 @@ impl FS {
      * @return {number} inode id of mount point if successful, or -errno if mounting failed.
      */
     public Mount(path : string, fs : FS) : number {
-        dbg_assert(fs.qidcounter === this.qidcounter,
+        dbg_assert(fs.qidcounter === self.qidcounter,
             "Cannot mount filesystem whose qid numbers aren't synchronised with current filesystem.");
 
-        const path_infos = this.SearchPath(path);
+        const path_infos = self.SearchPath(path);
 
         if(path_infos.parentid === -1)
         {
@@ -1669,17 +1674,17 @@ impl FS {
         }
         if(path_infos.forward_path)
         {
-            const parent = this.inodes[path_infos.parentid];
-            const ret = this.follow_fs(parent).Mount(path_infos.forward_path, fs);
+            const parent = self.inodes[path_infos.parentid];
+            const ret = self.follow_fs(parent).Mount(path_infos.forward_path, fs);
             if(ret < 0) return ret;
-            return this.get_forwarder(parent.mount_id, ret);
+            return self.get_forwarder(parent.mount_id, ret);
         }
 
-        const mount_id = this.mounts.length;
-        this.mounts.push(new FSMountInfo(fs));
+        const mount_id = self.mounts.length;
+        self.mounts.push(new FSMountInfo(fs));
 
-        const idx = this.create_forwarder(mount_id, 0);
-        this.link_under_dir(path_infos.parentid, idx, path_infos.name);
+        const idx = self.create_forwarder(mount_id, 0);
+        self.link_under_dir(path_infos.parentid, idx, path_infos.name);
 
         return idx;
     }
@@ -1701,7 +1706,7 @@ impl FS {
         dbg_assert(length > 0, "Filesystem: Invalid non-positive lock length: " + length);
 
         const lock = new FSLockRegion();
-        lock.type = type;
+        lock.r#type = type;
         lock.start = start;
         lock.length = length;
         lock.proc_id = proc_id;
@@ -1716,12 +1721,12 @@ impl FS {
      * @return {FSLockRegion} The first conflicting lock found, or null if requested lock is possible.
      */
     public GetLock(id : number, request : FSLockRegion) : FSLockRegion | null {
-        const inode = this.inodes[id];
+        const inode = self.inodes[id];
 
         if(this.is_forwarder(inode))
         {
             const foreign_id = inode.foreign_id;
-            return this.follow_fs(inode).GetLock(foreign_id, request);
+            return self.follow_fs(inode).GetLock(foreign_id, request);
         }
 
         for(const region of inode.locks)
@@ -1741,18 +1746,18 @@ impl FS {
      * @return {number} One of P9_LOCK_SUCCESS / P9_LOCK_BLOCKED / P9_LOCK_ERROR / P9_LOCK_GRACE.
      */
     public Lock(id : number, request : FSLockRegion, flags : number) : number {
-        const inode = this.inodes[id];
+        const inode = self.inodes[id];
 
         if(this.is_forwarder(inode))
         {
             const foreign_id = inode.foreign_id;
-            return this.follow_fs(inode).Lock(foreign_id, request, flags);
+            return self.follow_fs(inode).Lock(foreign_id, request, flags);
         }
 
         request = request.clone();
 
         // (1) Check whether lock is possible before any modification.
-        if(request.type !== P9_LOCK_TYPE_UNLCK && this.GetLock(id, request))
+        if(request.r#type !== P9_LOCK_TYPE_UNLCK && self.GetLock(id, request))
         {
             return P9_LOCK_BLOCKED;
         }
@@ -1764,8 +1769,8 @@ impl FS {
 
             dbg_assert(region.length > 0,
                 "Filesystem: Found non-positive lock region length: " + region.length);
-            dbg_assert(region.type === P9_LOCK_TYPE_RDLCK || region.type === P9_LOCK_TYPE_WRLCK,
-                "Filesystem: Found invalid lock type: " + region.type);
+            dbg_assert(region.r#type === P9_LOCK_TYPE_RDLCK || region.r#type === P9_LOCK_TYPE_WRLCK,
+                "Filesystem: Found invalid lock type: " + region.r#type);
             dbg_assert(!inode.locks[i-1] || inode.locks[i-1].start <= region.start,
                 "Filesystem: Locks should be sorted by starting offset");
 
@@ -1789,7 +1794,7 @@ impl FS {
             const length1 = request.start - start1;
             const length2 = region.start + region.length - start2;
 
-            if(length1 > 0 && length2 > 0 && region.type === request.type)
+            if(length1 > 0 && length2 > 0 && region.r#type === request.r#type)
             {
                 // Requested region is already locked with the required type.
                 // Return early - no need to modify anything.
@@ -1816,7 +1821,7 @@ impl FS {
                 while(i < inode.locks.length && inode.locks[i].start < start2) i++;
 
                 inode.locks.splice(i, 0,
-                    this.DescribeLock(region.type, start2, length2, region.proc_id, region.client_id));
+                    self.DescribeLock(region.r#type, start2, length2, region.proc_id, region.client_id));
             }
             else if(length1 <= 0)
             {
@@ -1829,7 +1834,7 @@ impl FS {
         // (3) Insert requested lock region as a whole.
         // No point in adding the requested lock region as fragmented bits in the above loop
         // and having to merge them all back into one.
-        if(request.type !== P9_LOCK_TYPE_UNLCK)
+        if(request.r#type !== P9_LOCK_TYPE_UNLCK)
         {
             let new_region = request;
             let has_merged = false;
@@ -1864,7 +1869,7 @@ impl FS {
                     inode.locks.splice(i, 1);
                 }
 
-                // No more mergable regions after this.
+                // No more mergable regions after self.
                 break;
             }
         }
@@ -1873,29 +1878,29 @@ impl FS {
     }
 
     public read_dir(path : string) : Nullable<Array<string>> {
-        const p = this.SearchPath(path);
+        const p = self.SearchPath(path);
 
         if(p.id === -1)
         {
             return undefined;
         }
 
-        const dir = this.GetInode(p.id);
+        const dir = self.GetInode(p.id);
 
         return Array.from(dir.direntries.keys()).filter(path => path !== "." && path !== "..");
     }
 
     public read_file(file : string) : Uint8Array {
-        const p = this.SearchPath(file);
+        const p = self.SearchPath(file);
 
         if(p.id === -1)
         {
             return Promise.resolve(null);
         }
 
-        const inode = this.GetInode(p.id);
+        const inode = self.GetInode(p.id);
 
-        return this.Read(p.id, 0, inode.size);
+        return self.Read(p.id, 0, inode.size);
     }
     */
 }
@@ -1964,7 +1969,7 @@ impl INode {
             locks : Vec::new(), // lock regions applied to the file, sorted by starting offset.
         
             // For forwarders:
-            mount_id : -1, // which fs in this.mounts does this inode forward to?
+            mount_id : -1, // which fs in self.mounts does this inode forward to?
             foreign_id : -1 // which foreign inode id does it represent?
         
             //this.qid_type = 0;
@@ -1978,7 +1983,7 @@ impl INode {
 /*
     get_state() : Array<string | i32 | Array<FSLockRegion> | null | Array<i32>> {
         const state = [];
-        state[0] = this.mode;
+        state[0] = self.mode;
     
         if((this.mode & S_IFMT) === S_IFDIR)
         {
@@ -1986,87 +1991,87 @@ impl INode {
         }
         else if((this.mode & S_IFMT) === S_IFREG)
         {
-            state[1] = this.sha256sum;
+            state[1] = self.sha256sum;
         }
         else if((this.mode & S_IFMT) === S_IFLNK)
         {
-            state[1] = this.symlink;
+            state[1] = self.symlink;
         }
         else if((this.mode & S_IFMT) === S_IFSOCK)
         {
-            state[1] = [this.minor, this.major];
+            state[1] = [this.minor, self.major];
         }
         else
         {
             state[1] = null;
         }
     
-        state[2] = this.locks;
-        state[3] = this.status;
-        state[4] = this.size;
-        state[5] = this.uid;
-        state[6] = this.gid;
-        state[7] = this.fid;
-        state[8] = this.ctime;
-        state[9] = this.atime;
-        state[10] = this.mtime;
-        state[11] = this.qid.version;
-        state[12] = this.qid.path;
-        state[13] = this.nlinks;
+        state[2] = self.locks;
+        state[3] = self.status;
+        state[4] = self.size;
+        state[5] = self.uid;
+        state[6] = self.gid;
+        state[7] = self.fid;
+        state[8] = self.ctime;
+        state[9] = self.atime;
+        state[10] = self.mtime;
+        state[11] = self.qid.version;
+        state[12] = self.qid.path;
+        state[13] = self.nlinks;
     
-        //state[23] = this.mount_id;
-        //state[24] = this.foreign_id;
-        //state[25] = this.caps; // currently not writable
+        //state[23] = self.mount_id;
+        //state[24] = self.foreign_id;
+        //state[25] = self.caps; // currently not writable
         return state;
     }
 
     set_state(state : Array<string | i32 | Array<FSLockRegion> | Array<i32> | Array<Array<string | i32>> | null>) : void {
-        this.mode = state[0] as i32;
+        self.mode = state[0] as i32;
 
         if((this.mode & S_IFMT) === S_IFDIR)
         {
-            this.direntries = new Map();
+            self.direntries = new Map();
             for(const [name, entry] of (state[1] as Array<Array<string | i32>>))
             {
-                this.direntries.set(name, entry);
+                self.direntries.set(name, entry);
             }
         }
         else if((this.mode & S_IFMT) === S_IFREG)
         {
-            this.sha256sum = state[1] as string;
+            self.sha256sum = state[1] as string;
         }
         else if((this.mode & S_IFMT) === S_IFLNK)
         {
-            this.symlink = state[1] as string;
+            self.symlink = state[1] as string;
         }
         else if((this.mode & S_IFMT) === S_IFSOCK)
         {
-            [this.minor, this.major] = state[1] as Array<i32>;
+            [this.minor, self.major] = state[1] as Array<i32>;
         }
         else
         {
             // Nothing
         }
     
-        this.locks = [];
+        self.locks = [];
         for(const lock_state of (state[2] as Array<FSLockRegion>))
         {
             const lock = new FSLockRegion();
             lock.set_state(lock_state);
-            this.locks.push(lock);
+            self.locks.push(lock);
         }
-        this.status = state[3] as i32;
-        this.size = state[4] as i32;
-        this.uid = state[5] as i32;
-        this.gid = state[6] as i32;
-        this.fid = state[7] as i32;
-        this.ctime = state[8] as i32;
-        this.atime = state[9] as i32;
-        this.mtime = state[10] as i32;
-        this.qid.type = (this.mode & S_IFMT) >> 8;
-        this.qid.version = state[11] as i32;
-        this.qid.path = state[12] as i32;
-        this.nlinks = state[13] as i32;
+        self.status = state[3] as i32;
+        self.size = state[4] as i32;
+        self.uid = state[5] as i32;
+        self.gid = state[6] as i32;
+        self.fid = state[7] as i32;
+        self.ctime = state[8] as i32;
+        self.atime = state[9] as i32;
+        self.mtime = state[10] as i32;
+        self.qid.r#type = (this.mode & S_IFMT) >> 8;
+        self.qid.version = state[11] as i32;
+        self.qid.path = state[12] as i32;
+        self.nlinks = state[13] as i32;
     
         //this.mount_id = state[23];
         //this.foreign_id = state[24];
@@ -2099,7 +2104,7 @@ impl FSMountInfo {
     get_state() : Array<any> {
         const state = [];
 
-        state[0] = this.fs;
+        state[0] = self.fs;
 
         state[1] = [...this.backtrack];
     
@@ -2107,9 +2112,9 @@ impl FSMountInfo {
     }
 
     set_state(state : Array<any>) : void {
-        this.fs = state[0] as FS;
+        self.fs = state[0] as FS;
         // todo: figure out this
-        this.backtrack = new Map(state[1] as object);
+        self.backtrack = new Map(state[1] as object);
     }
 }
 */
@@ -2143,22 +2148,22 @@ impl FSLockRegion {
     public get_state() : Array<any> {
         const state = [];
 
-        state[0] = this.type;
-        state[1] = this.start;
+        state[0] = self.r#type;
+        state[1] = self.start;
         // Infinity is not JSON.stringify-able
-        state[2] = this.length === Infinity ? 0 : this.length;
-        state[3] = this.proc_id;
-        state[4] = this.client_id;
+        state[2] = self.length === Infinity ? 0 : self.length;
+        state[3] = self.proc_id;
+        state[4] = self.client_id;
 
         return state;
     }
 
     public set_state(state : Array<any>) : void {
-        this.type = state[0] as i32;
-        this.start = state[1] as i32;
-        this.length = (state[2] === 0 ? Infinity : state[2]) as i32;
-        this.proc_id = state[3] as i32;
-        this.client_id = state[4] as string;
+        self.r#type = state[0] as i32;
+        self.start = state[1] as i32;
+        self.length = (state[2] === 0 ? Infinity : state[2]) as i32;
+        self.proc_id = state[3] as i32;
+        self.client_id = state[4] as string;
     }
 
     public clone() : FSLockRegion {
@@ -2168,22 +2173,22 @@ impl FSLockRegion {
     }
 
     public conflicts_with(region: FSLockRegion) : boolean {
-        if(this.proc_id === region.proc_id && this.client_id === region.client_id) return false;
-        if(this.type === P9_LOCK_TYPE_UNLCK || region.type === P9_LOCK_TYPE_UNLCK) return false;
-        if(this.type !== P9_LOCK_TYPE_WRLCK && region.type !== P9_LOCK_TYPE_WRLCK) return false;
-        if(this.start + this.length <= region.start) return false;
-        if(region.start + region.length <= this.start) return false;
+        if(this.proc_id === region.proc_id && self.client_id === region.client_id) return false;
+        if(this.r#type === P9_LOCK_TYPE_UNLCK || region.r#type === P9_LOCK_TYPE_UNLCK) return false;
+        if(this.r#type !== P9_LOCK_TYPE_WRLCK && region.r#type !== P9_LOCK_TYPE_WRLCK) return false;
+        if(this.start + self.length <= region.start) return false;
+        if(region.start + region.length <= self.start) return false;
         return true;    
     }
 
     public is_alike(region : FSLockRegion) : boolean {
-        return region.proc_id === this.proc_id &&
-            region.client_id === this.client_id &&
-            region.type === this.type;
+        return region.proc_id === self.proc_id &&
+            region.client_id === self.client_id &&
+            region.r#type === self.r#type;
     }
 
     public may_merge_after(region : FSLockRegion) : boolean {
-        return this.is_alike(region) && region.start + region.length === this.start;
+        return self.is_alike(region) && region.start + region.length === self.start;
     }
 }
 */
