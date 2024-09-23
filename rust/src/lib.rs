@@ -10,6 +10,8 @@ use std::vec::Vec;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 
 // -------------------------------------------------
 // --------------------- 9P ------------------------
@@ -264,7 +266,7 @@ impl FS {
             //);
         };
 
-        result.CreateDirectory("".to_owned(), -1);
+        result.CreateDirectory("".to_owned(), None);
 
         result
     }
@@ -346,7 +348,7 @@ impl FS {
     }
 
     public load_from_json(fs : Map<string, any>) : void {
-        dbg_assert(fs, "Invalid fs passed to load_from_json");
+        debug_assert!(fs, "Invalid fs passed to load_from_json");
 
         if(fs.get("version") !== JSONFS_VERSION)
         {
@@ -390,7 +392,7 @@ impl FS {
         {
             inode.status = STATUS_ON_STORAGE;
             inode.sha256sum = data.get(JSONFS_IDX_SHA256);
-            dbg_assert(inode.sha256sum);
+            debug_assert!(inode.sha256sum);
             self.PushInode(inode, parentid, name);
         }
         else if(ifmt === S_IFLNK)
@@ -434,19 +436,20 @@ impl FS {
      * @param {number} idx
      * @param {string} name
      */
-    public link_under_dir(parentid : number, idx : number, name : string) : void {
+     */
+    pub fn link_under_dir(parentid : number, idx : number, name : string) : void {
         const inode = self.inodes[idx];
         const parent_inode = self.inodes[parentid];
 
-        dbg_assert(!this.is_forwarder(parent_inode),
+        debug_assert!(!this.is_forwarder(parent_inode),
             "Filesystem: Shouldn't link under fowarder parents");
-        dbg_assert(this.IsDirectory(parentid),
+        debug_assert!(this.IsDirectory(parentid),
             "Filesystem: Can't link under non-directories");
-        dbg_assert(this.should_be_linked(inode),
+        debug_assert!(this.should_be_linked(inode),
             "Filesystem: Can't link across filesystems apart from their root");
-        dbg_assert(inode.nlinks >= 0,
+        debug_assert!(inode.nlinks >= 0,
             "Filesystem: Found negative nlinks value of " + inode.nlinks);
-        dbg_assert(!parent_inode.direntries.has(name),
+        debug_assert!(!parent_inode.direntries.has(name),
             "Filesystem: Name '" + name + "' is already taken");
 
         parent_inode.direntries.set(name, idx);
@@ -454,7 +457,7 @@ impl FS {
 
         if(this.IsDirectory(idx))
         {
-            dbg_assert(!inode.direntries.has(".."),
+            debug_assert!(!inode.direntries.has(".."),
                 "Filesystem: Cannot link a directory twice");
 
             if(!inode.direntries.has(".")) inode.nlinks++;
@@ -464,6 +467,7 @@ impl FS {
             parent_inode.nlinks++;
         }
     }
+    /*
 
     /**
      * @private
@@ -475,13 +479,13 @@ impl FS {
         const inode = self.inodes[idx];
         const parent_inode = self.inodes[parentid];
 
-        dbg_assert(!this.is_forwarder(parent_inode), "Filesystem: Can't unlink from forwarders");
-        dbg_assert(this.IsDirectory(parentid), "Filesystem: Can't unlink from non-directories");
+        debug_assert!(!this.is_forwarder(parent_inode), "Filesystem: Can't unlink from forwarders");
+        debug_assert!(this.IsDirectory(parentid), "Filesystem: Can't unlink from non-directories");
 
         const exists = parent_inode.direntries.delete(name);
         if(!exists)
         {
-            dbg_assert(false, "Filesystem: Can't unlink non-existent file: " + name);
+            debug_assert!(false, "Filesystem: Can't unlink non-existent file: " + name);
             return;
         }
 
@@ -489,37 +493,36 @@ impl FS {
 
         if(this.IsDirectory(idx))
         {
-            dbg_assert(inode.direntries.get("..") === parentid,
+            debug_assert!(inode.direntries.get("..") === parentid,
                 "Filesystem: Found directory with bad parent id");
 
             inode.direntries.delete("..");
             parent_inode.nlinks--;
         }
 
-        dbg_assert(inode.nlinks >= 0,
+        debug_assert!(inode.nlinks >= 0,
             "Filesystem: Found negative nlinks value of " + inode.nlinks);
     }
-
-    public PushInode(inode : number, parentid : number, name : string) : void {
-        if(parentid !== -1) {
+    */
+    pub fn PushInode(&mut self, inode : INode, parentid : Option<usize>, name : String) {
+        if parentid.is_some() {
+            inode.fid = self.inodes.len();
             self.inodes.push(inode);
-            inode.fid = self.inodes.length - 1;
-            self.link_under_dir(parentid, inode.fid, name);
+            self.link_under_dir(parentid.unwrap(), inode.fid, name);
             return;
         } else {
-            if(this.inodes.length === 0) { // if root directory
-                self.inodes.push(inode);
-                inode.direntries.set(".", 0);
-                inode.direntries.set("..", 0);
+            if self.inodes.len() == 0 { // if root directory
+                inode.direntries.insert(".".to_owned(), 0);
+                inode.direntries.insert("..".to_owned(), 0);
                 inode.nlinks = 2;
+                self.inodes.push(inode);
                 return;
             }
         }
 
-        message.Debug("Error in Filesystem: Pushed inode with name = "+ name + " has no parent");
-        message.Abort();
+        debug_assert!(false, "Error in Filesystem: Pushed inode with name = {} has no parent", name)
     }
-
+    /*
     /**
          * Clones given inode to new idx, effectively diverting the inode to new idx value.
          * Hence, original idx value is now free to use without losing the original information.
@@ -533,8 +536,8 @@ impl FS {
         const old_inode = self.inodes[old_idx];
         const new_inode = new Inode(-1);
 
-        dbg_assert(old_inode, "Filesystem divert: name (" + filename + ") not found");
-        dbg_assert(this.IsDirectory(old_idx) || old_inode.nlinks <= 1,
+        debug_assert!(old_inode, "Filesystem divert: name (" + filename + ") not found");
+        debug_assert!(this.IsDirectory(old_idx) || old_inode.nlinks <= 1,
             "Filesystem: can't divert hardlinked file '" + filename + "' with nlinks=" +
             old_inode.nlinks);
 
@@ -596,37 +599,45 @@ impl FS {
             nlinks: dest_inode.nlinks,
         });
     }
-
-    public CreateInode() : INode {
-        //console.log("CreateInode", Error().stack);
-        const now = Math.round(Date.now() / 1000);
-        const inode = new INode(++this.qidcounter.last_qidnumber);
-        inode.atime = inode.ctime = inode.mtime = now;
-        return inode;
-    }
     */
 
+    pub fn CreateInode(&mut self) -> INode {
+        //console.log("CreateInode", Error().stack);
+        let start = SystemTime::now();
+        let since_the_epoch = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards");
+        let millis = since_the_epoch.as_millis();
+        // Divide by 1000 and round
+        let now = (millis as f64 / 1000.0).round() as u64;
+        self.qidcounter.last_qidnumber += 1;
+        let mut inode = INode::new(self.qidcounter.last_qidnumber);
+        
+        inode.mtime = now;
+        inode.atime = now;
+        inode.ctime = now;
+        return inode;
+    }
+
     // Note: parentid = -1 for initial root directory.
-    pub fn CreateDirectory(&mut self, name: String, parentid: i32) -> i32 {
-        let as_usize = usize::try_from(parentid);
-        if as_usize.is_ok() {
-            let parentid_as_usize = as_usize.unwrap();
-            let parent_inode = self.inodes[parentid_as_usize];
-            if FS::is_forwarder(parent_inode)
+    pub fn CreateDirectory(&mut self, name: String, parentid: Option<usize>) -> usize {
+        
+        if parentid.is_some() {
+            let parent_inode = self.inodes[parentid.unwrap()];
+            if FS::is_forwarder(&parent_inode)
             {
                 let foreign_parentid = parent_inode.foreign_id;
                 let foreign_id = self.follow_fs(parent_inode).CreateDirectory(name, foreign_parentid);
-                return self.create_forwarder(parent_inode.mount_id, foreign_id);
+                return self.create_forwarder(parent_inode.mount_id.unwrap(), foreign_id);
             }
         }
         
         let x = self.CreateInode();
         x.mode = 0x01FF | S_IFDIR;
-        if as_usize.is_ok() {
-            let parentid_as_usize = as_usize.unwrap();
-            x.uid = self.inodes[parentid_as_usize].uid;
-            x.gid = self.inodes[parentid_as_usize].gid;
-            x.mode = (self.inodes[parentid_as_usize].mode & 0x1FF) | S_IFDIR;
+        if parentid.is_some() {
+            x.uid = self.inodes[parentid.unwrap()].uid;
+            x.gid = self.inodes[parentid.unwrap()].gid;
+            x.mode = (self.inodes[parentid.unwrap()].mode & 0x1FF) | S_IFDIR;
         }
         x.qid.r#type = S_IFDIR >> 8;
         self.PushInode(x, parentid, name);
@@ -1018,12 +1029,12 @@ impl FS {
             if(childid === idx) return name;
         }
 
-        dbg_assert(false, "Filesystem: Found directory inode whose parent doesn't link to it");
+        debug_assert!(false, "Filesystem: Found directory inode whose parent doesn't link to it");
         return "";
     }
 
     public GetFullPath(idx : number) : string {
-        dbg_assert(this.IsDirectory(idx), "Filesystem: Cannot get full path of non-directory inode");
+        debug_assert!(this.IsDirectory(idx), "Filesystem: Cannot get full path of non-directory inode");
 
         var path = "";
 
@@ -1083,7 +1094,7 @@ impl FS {
         // forward if necessary
         if(this.is_forwarder(parent_inode))
         {
-            dbg_assert(this.is_forwarder(inode), "Children of forwarders should be forwarders");
+            debug_assert!(this.is_forwarder(inode), "Children of forwarders should be forwarders");
 
             const foreign_parentid = parent_inode.foreign_id;
             return self.follow_fs(parent_inode).Unlink(foreign_parentid, name);
@@ -1127,7 +1138,7 @@ impl FS {
      */
     public async get_buffer(idx : number) : Promise<Uint8Array> {
         const inode = self.inodes[idx];
-        dbg_assert(inode, `Filesystem get_buffer: idx ${idx} does not point to an inode`);
+        debug_assert!(inode, `Filesystem get_buffer: idx ${idx} does not point to an inode`);
 
         if(this.inodedata[idx])
         {
@@ -1135,7 +1146,7 @@ impl FS {
         }
         else if(inode.status === STATUS_ON_STORAGE)
         {
-            dbg_assert(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
+            debug_assert!(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
             return await self.storage.read(inode.sha256sum, 0, inode.size);
         }
         else
@@ -1153,7 +1164,7 @@ impl FS {
      */
     public async get_data(idx : number, offset : number, count : number) : Promise<Uint8Array> {
         const inode = self.inodes[idx];
-        dbg_assert(inode, `Filesystem get_data: idx ${idx} does not point to an inode`);
+        debug_assert!(inode, `Filesystem get_data: idx ${idx} does not point to an inode`);
 
         if(this.inodedata[idx])
         {
@@ -1161,7 +1172,7 @@ impl FS {
         }
         else if(inode.status === STATUS_ON_STORAGE)
         {
-            dbg_assert(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
+            debug_assert!(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
             return await self.storage.read(inode.sha256sum, offset, count);
         }
         else
@@ -1190,8 +1201,8 @@ impl FS {
      * @return {!Inode}
      */
     public GetInode(idx : number) : INode {
-        dbg_assert(!isNaN(idx), "Filesystem GetInode: NaN idx");
-        dbg_assert(idx >= 0 && idx < self.inodes.length, "Filesystem GetInode: out of range idx:" + idx);
+        debug_assert!(!isNaN(idx), "Filesystem GetInode: NaN idx");
+        debug_assert!(idx >= 0 && idx < self.inodes.length, "Filesystem GetInode: out of range idx:" + idx);
 
         const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
@@ -1286,7 +1297,7 @@ impl FS {
         for(var i=toDelete.length-1; i>=0; i--)
         {
             const ret = self.Unlink(toDelete[i].parentid, toDelete[i].name);
-            dbg_assert(ret === 0, "Filesystem RecursiveDelete failed at parent=" + toDelete[i].parentid +
+            debug_assert!(ret === 0, "Filesystem RecursiveDelete failed at parent=" + toDelete[i].parentid +
                 ", name='" + toDelete[i].name + "' with error code: " + (-ret));
         }
     }
@@ -1297,12 +1308,12 @@ impl FS {
 
         if((this.inodes[ids.id].mode&S_IFMT) === S_IFREG){
             const ret = self.Unlink(ids.parentid, ids.name);
-            dbg_assert(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
+            debug_assert!(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
         }
         else if((this.inodes[ids.id].mode&S_IFMT) === S_IFDIR){
             self.RecursiveDelete(path);
             const ret = self.Unlink(ids.parentid, ids.name);
-            dbg_assert(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
+            debug_assert!(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
         }
     }
 
@@ -1392,8 +1403,8 @@ impl FS {
 
     public RoundToDirentry(dirid: number, offset_target: number) : number {
         const data = self.inodedata[dirid];
-        dbg_assert(data, `FS directory data for dirid=${dirid} should be generated`);
-        dbg_assert(data.length, "FS directory should have at least an entry");
+        debug_assert!(data, `FS directory data for dirid=${dirid} should be generated`);
+        debug_assert!(data.length, "FS directory should have at least an entry");
 
         if(offset_target >= data.length)
         {
@@ -1446,7 +1457,7 @@ impl FS {
      * @return {!Array<string>} List of children names
      */
     public GetChildren(idx : number) : Array<string> {
-        dbg_assert(this.IsDirectory(idx), "Filesystem: cannot get children of non-directory inode");
+        debug_assert!(this.IsDirectory(idx), "Filesystem: cannot get children of non-directory inode");
         const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
         {
@@ -1468,7 +1479,7 @@ impl FS {
      * @return {number} Local idx of parent
      */
     public GetParent(idx : number) : number {
-        dbg_assert(this.IsDirectory(idx), "Filesystem: cannot get parent of non-directory inode");
+        debug_assert!(this.IsDirectory(idx), "Filesystem: cannot get parent of non-directory inode");
 
         const inode = self.inodes[idx];
 
@@ -1479,7 +1490,7 @@ impl FS {
         else
         {
             const foreign_dirid = self.follow_fs(inode).GetParent(inode.foreign_id);
-            dbg_assert(foreign_dirid !== -1, "Filesystem: should not have invalid parent ids");
+            debug_assert!(foreign_dirid !== -1, "Filesystem: should not have invalid parent ids");
             return self.get_forwarder(inode.mount_id, foreign_dirid);
         }
     }
@@ -1538,54 +1549,54 @@ impl FS {
 
     // -----------------------------------------------------
 
-
-        /**
+    */
+     /**
      * @private
      * @param {number} idx Local idx of inode.
      * @param {number} mount_id Mount number of the destination fs.
      * @param {number} foreign_id Foreign idx of destination inode.
      */
-    public set_forwarder(idx : number, mount_id : number, foreign_id : number) : void {
-        const inode = self.inodes[idx];
+    pub fn set_forwarder(&mut self, idx : usize, mount_id : usize, foreign_id : usize) {
+        
+        let inode = &mut self.inodes[idx];
 
-        dbg_assert(inode.nlinks === 0,
+        debug_assert!(inode.nlinks == 0,
             "Filesystem: attempted to convert an inode into forwarder before unlinking the inode");
 
-        if(this.is_forwarder(inode))
+        if FS::is_forwarder(&inode) 
         {
-            self.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
+            self.mounts[inode.mount_id.unwrap()].backtrack.remove(&inode.foreign_id.unwrap());
         }
 
         inode.status = STATUS_FORWARDING;
-        inode.mount_id = mount_id;
-        inode.foreign_id = foreign_id;
+        inode.mount_id = Some(mount_id);
+        inode.foreign_id = Some(foreign_id);
 
-        self.mounts[mount_id].backtrack.set(foreign_id, idx);
+        self.mounts[mount_id].backtrack.insert(foreign_id, idx);
     }
-
+    
     /**
      * @private
      * @param {number} mount_id Mount number of the destination fs.
      * @param {number} foreign_id Foreign idx of destination inode.
      * @return {number} Local idx of newly created forwarder.
      */
-    public create_forwarder(mount_id : number, foreign_id : number) : number {
-        const inode = self.CreateInode();
+    pub fn create_forwarder(&mut self, mount_id : usize, foreign_id : usize) -> usize {
+        let mut inode = self.CreateInode();
 
-        const idx = self.inodes.length;
-        self.inodes.push(inode);
+        let idx = self.inodes.len();
         inode.fid = idx;
+        self.inodes.push(inode);
 
         self.set_forwarder(idx, mount_id, foreign_id);
         return idx;
     }
-    */
     /**
      * @private
      * @param {Inode} inode
      * @return {boolean}
      */
-    pub fn is_forwarder(inode : INode) -> bool {
+    pub fn is_forwarder(inode : &INode) -> bool {
         return inode.status == STATUS_FORWARDING;
     }
     /*
@@ -1609,8 +1620,8 @@ impl FS {
     public get_forwarder(mount_id : number, foreign_id : number) : number {
         const mount = self.mounts[mount_id];
 
-        dbg_assert(foreign_id >= 0, "Filesystem get_forwarder: invalid foreign_id: " + foreign_id);
-        dbg_assert(mount, "Filesystem get_forwarder: invalid mount number: " + mount_id);
+        debug_assert!(foreign_id >= 0, "Filesystem get_forwarder: invalid foreign_id: " + foreign_id);
+        debug_assert!(mount, "Filesystem get_forwarder: invalid mount number: " + mount_id);
 
         const result = mount.backtrack.get(foreign_id);
 
@@ -1628,27 +1639,33 @@ impl FS {
      * @param {Inode} inode
      */
     public delete_forwarder(inode : INode) : void {
-        dbg_assert(this.is_forwarder(inode), "Filesystem delete_forwarder: expected forwarder");
+        debug_assert!(this.is_forwarder(inode), "Filesystem delete_forwarder: expected forwarder");
 
         inode.status = STATUS_INVALID;
         self.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
     }
 
+    */
     /**
      * @private
      * @param {Inode} inode
      * @return {FS}
      */
-    public follow_fs(inode : INode) : FS {
-        const mount = self.mounts[inode.mount_id];
-
-        dbg_assert(this.is_forwarder(inode),
+    pub fn follow_fs(&mut self, inode : INode) -> &FS {
+        debug_assert!(FS::is_forwarder(&inode),
             "Filesystem follow_fs: inode should be a forwarding inode");
-        dbg_assert(mount, "Filesystem follow_fs: inode<id=" + inode.fid +
-            "> should point to valid mounted FS");
 
-        return mount.fs;
+        let msg : &str = "Filesystem follow_fs: inode<id={inode.fid}> should point to valid mounted FS";
+
+        debug_assert!(inode.mount_id.is_some(), "{}", msg);
+        
+        let mount = self.mounts.get_mut(inode.mount_id.unwrap());
+
+        debug_assert!(mount.is_none(), "{}", msg);
+        
+        return &mount.unwrap().fs;
     }
+    /*
 
     /**
      * Mount another filesystem to given path.
@@ -1657,7 +1674,7 @@ impl FS {
      * @return {number} inode id of mount point if successful, or -errno if mounting failed.
      */
     public Mount(path : string, fs : FS) : number {
-        dbg_assert(fs.qidcounter === self.qidcounter,
+        debug_assert!(fs.qidcounter === self.qidcounter,
             "Cannot mount filesystem whose qid numbers aren't synchronised with current filesystem.");
 
         const path_infos = self.SearchPath(path);
@@ -1698,12 +1715,12 @@ impl FS {
      * @return {!FSLockRegion}
      */
     public DescribeLock(type : number, start : number, length : number, proc_id : number, client_id: string) : FSLockRegion {
-        dbg_assert(type === P9_LOCK_TYPE_RDLCK ||
+        debug_assert!(type === P9_LOCK_TYPE_RDLCK ||
             type === P9_LOCK_TYPE_WRLCK ||
             type === P9_LOCK_TYPE_UNLCK,
             "Filesystem: Invalid lock type: " + type);
-        dbg_assert(start >= 0, "Filesystem: Invalid negative lock starting offset: " + start);
-        dbg_assert(length > 0, "Filesystem: Invalid non-positive lock length: " + length);
+        debug_assert!(start >= 0, "Filesystem: Invalid negative lock starting offset: " + start);
+        debug_assert!(length > 0, "Filesystem: Invalid non-positive lock length: " + length);
 
         const lock = new FSLockRegion();
         lock.r#type = type;
@@ -1767,11 +1784,11 @@ impl FS {
         {
             const region = inode.locks[i];
 
-            dbg_assert(region.length > 0,
+            debug_assert!(region.length > 0,
                 "Filesystem: Found non-positive lock region length: " + region.length);
-            dbg_assert(region.r#type === P9_LOCK_TYPE_RDLCK || region.r#type === P9_LOCK_TYPE_WRLCK,
+            debug_assert!(region.r#type === P9_LOCK_TYPE_RDLCK || region.r#type === P9_LOCK_TYPE_WRLCK,
                 "Filesystem: Found invalid lock type: " + region.r#type);
-            dbg_assert(!inode.locks[i-1] || inode.locks[i-1].start <= region.start,
+            debug_assert!(!inode.locks[i-1] || inode.locks[i-1].start <= region.start,
                 "Filesystem: Locks should be sorted by starting offset");
 
             // Skip to requested region.
@@ -1783,7 +1800,7 @@ impl FS {
             // Skip over locks of different owners.
             if(region.proc_id !== request.proc_id || region.client_id !== request.client_id)
             {
-                dbg_assert(!region.conflicts_with(request),
+                debug_assert!(!region.conflicts_with(request),
                     "Filesytem: Found conflicting lock region, despite already checked for conflicts");
                 continue;
             }
@@ -1921,10 +1938,10 @@ struct INode {
     size : i32,
     uid : i32,
     gid : i32,
-    fid : i32,
-    ctime : i32,
-    atime : i32,
-    mtime : i32,
+    fid : usize,
+    ctime : u64,
+    atime : u64,
+    mtime : u64,
     major : i32,
     minor : i32,
     symlink : String,
@@ -1936,8 +1953,8 @@ struct INode {
 
     locks : Vec<FSLockRegion>,
 
-    mount_id : i32,
-    foreign_id : i32
+    mount_id : Option<usize>,
+    foreign_id : Option<usize>
 }
 
 impl INode {
@@ -1969,8 +1986,8 @@ impl INode {
             locks : Vec::new(), // lock regions applied to the file, sorted by starting offset.
         
             // For forwarders:
-            mount_id : -1, // which fs in self.mounts does this inode forward to?
-            foreign_id : -1 // which foreign inode id does it represent?
+            mount_id : None, // which fs in self.mounts does this inode forward to?
+            foreign_id : None // which foreign inode id does it represent?
         
             //this.qid_type = 0;
             //this.qid_version = 0;
@@ -2086,7 +2103,7 @@ struct FSMountInfo
 {
     fs : FS,
     // Maps foreign inode id back to local inode id.
-    backtrack : HashMap<i32, i32>
+    backtrack : HashMap<usize, usize>
 }
 
 
