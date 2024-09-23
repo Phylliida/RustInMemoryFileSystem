@@ -296,6 +296,7 @@ impl FS {
     
         return state;
     }
+    
 
     public set_state(state : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | FSMountInfo>) {
         self.inodes = state[0].map(state => { const inode = new Inode(0); inode.set_state(state); return inode; });
@@ -315,9 +316,9 @@ impl FS {
         self.used_size = state[4] as number;
         self.mounts = state.slice(5) as Array<FSMountInfo>;
     }
-
-
     */
+
+
     // -----------------------------------------------------
 
     pub fn add_event(&mut self, id : usize, on_event : EventFn) {
@@ -498,43 +499,60 @@ impl FS {
             }
         }
     }
-    /*
 
     /**
      * @private
      * @param {number} parentid
      * @param {string} name
      */
-    public unlink_from_dir(parentid : number, name : string) : void {
-        const idx = self.Search(parentid, name);
-        const inode = self.inodes[idx];
-        const parent_inode = self.inodes[parentid];
+    pub fn unlink_from_dir(&mut self, parentid : usize, name : String) {
+        
+        debug_assert!(!FS::is_forwarder(&self.inodes[parentid]), "Filesystem: Can't unlink from forwarders");
+        debug_assert!(self.is_directory(parentid), "Filesystem: Can't unlink from non-directories");
 
-        debug_assert!(!this.is_forwarder(parent_inode), "Filesystem: Can't unlink from forwarders");
-        debug_assert!(this.IsDirectory(parentid), "Filesystem: Can't unlink from non-directories");
+        let idx = self.search(parentid, &name).unwrap();
+        let is_directory = self.is_directory(idx);
+        let parent_inode = &mut self.inodes[parentid];
 
-        const exists = parent_inode.direntries.delete(name);
-        if(!exists)
+        
+        let exists = parent_inode.direntries.remove(&name);
+        if exists.is_none()
         {
-            debug_assert!(false, "Filesystem: Can't unlink non-existent file: " + name);
+            debug_assert!(false, "Filesystem: Can't unlink non-existent file: {}", name);
             return;
         }
+        let remove_parent_links = {
+            let inode = &mut self.inodes[idx];
 
-        inode.nlinks--;
+            inode.nlinks -= 1;
 
-        if(this.IsDirectory(idx))
-        {
-            debug_assert!(inode.direntries.get("..") === parentid,
-                "Filesystem: Found directory with bad parent id");
+            if is_directory
+            {
+                let up_dir = inode.direntries.get("..");
+                debug_assert!(up_dir.is_some() && *up_dir.unwrap() == parentid,
+                    "Filesystem: Found directory with bad parent id");
 
-            inode.direntries.delete("..");
-            parent_inode.nlinks--;
+                inode.direntries.remove("..");
+                true
+            }
+            else 
+            {
+                false
+            }
+        };
+        
+
+        if remove_parent_links {
+            let parent_inode_2 = &mut self.inodes[parentid];
+            parent_inode_2.nlinks -= 1;
         }
 
+        let inode = &mut self.inodes[idx];
+
         debug_assert!(inode.nlinks >= 0,
-            "Filesystem: Found negative nlinks value of " + inode.nlinks);
+            "Filesystem: Found negative nlinks value of {}", inode.nlinks);
     }
-    */
+    
     pub fn push_inode(&mut self, mut inode : INode, parentid : Option<usize>, name : String) {
         if parentid.is_some() {
             inode.fid = self.inodes.len();
@@ -981,21 +999,30 @@ impl FS {
 
         return await self.get_data(inodeid, offset, count);
     }
+    
+    */
+    pub fn search(&mut self, parentid : usize, name : &String) -> Option<usize> {
+        let parent_inode = &self.inodes[parentid];
 
-    public Search(parentid : number, name : string) : number {
-        const parent_inode = self.inodes[parentid];
-
-        if(this.is_forwarder(parent_inode))
+        if FS::is_forwarder(&parent_inode)
         {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = self.follow_fs(parent_inode).Search(foreign_parentid, name);
-            if(foreign_id === -1) return -1;
-            return self.get_forwarder(parent_inode.mount_id, foreign_id);
+            let mount_id = parent_inode.mount_id.unwrap();
+            let foreign_parentid = parent_inode.foreign_id.unwrap();
+            let foreign_id = self.follow_fs_by_id_mut(mount_id).
+                search(foreign_parentid, name);
+            if foreign_id.is_some()
+            {
+                return Some(self.get_forwarder(mount_id, foreign_id.unwrap()));
+            }
+            else 
+            {
+                return None;
+            }
         }
 
-        const childid = parent_inode.direntries.get(name);
-        return childid === undefined ? -1 : childid;
+        return parent_inode.direntries.get(name).map(|&x| x);
     }
+    /*
 
     public CountUsedInodes() : number {
         let count = self.inodes.length;
@@ -1656,22 +1683,26 @@ impl FS {
      * @param {number} foreign_id
      * @return {number} Local idx of a forwarder to described inode.
      */
-    public get_forwarder(mount_id : number, foreign_id : number) : number {
-        const mount = self.mounts[mount_id];
+     */
+    pub fn get_forwarder(&mut self, mount_id : usize, foreign_id : usize) -> usize {
+        let mount = &self.mounts.get(mount_id);
 
-        debug_assert!(foreign_id >= 0, "Filesystem get_forwarder: invalid foreign_id: " + foreign_id);
-        debug_assert!(mount, "Filesystem get_forwarder: invalid mount number: " + mount_id);
+        //debug_assert!(foreign_id >= 0, "Filesystem get_forwarder: invalid foreign_id: {}", foreign_id);
+        debug_assert!(mount.is_some(), "Filesystem get_forwarder: invalid mount number: {}", mount_id);
 
-        const result = mount.backtrack.get(foreign_id);
+        let result = mount.unwrap().backtrack.get(&foreign_id);
 
-        if(result === undefined)
+        if result.is_none()
         {
             // Create if not already exists.
             return self.create_forwarder(mount_id, foreign_id);
         }
-
-        return result;
+        else
+        {
+            return *result.unwrap();
+        }
     }
+    /*
 
     /**
      * @private
@@ -1699,8 +1730,8 @@ impl FS {
      * @param {Inode} inode
      * @return {FS}
      */
-    pub fn follow_fs_by_id(&mut self, mount_id : usize) -> &FS {
-        let mount = self.mounts.get_mut(mount_id);
+    pub fn follow_fs_by_id(&self, mount_id : usize) -> &FS {
+        let mount = self.mounts.get(mount_id);
 
         debug_assert!(mount.is_none(), "Filesystem follow_fs: mount_id:{} should point to valid mounted FS", mount_id);
         
