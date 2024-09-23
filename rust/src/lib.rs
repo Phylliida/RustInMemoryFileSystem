@@ -146,7 +146,7 @@ type EventFn = fn() -> ();
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Event {
-    id: i32,
+    id: usize,
     #[serde(skip)]
     on_event: Option<EventFn>
 }
@@ -317,41 +317,54 @@ impl FS {
     }
 
 
+    */
     // -----------------------------------------------------
 
-    public AddEvent(id : number, OnEvent : Function) : void {
-        var inode = self.inodes[id];
-        if(inode.status === STATUS_OK || inode.status === STATUS_ON_STORAGE) {
-            OnEvent();
+    pub fn add_event(&mut self, id : usize, on_event : EventFn) {
+        let inode = &self.inodes[id];
+        if inode.status == STATUS_OK || inode.status == STATUS_ON_STORAGE {
+            on_event();
         }
-        else if(this.is_forwarder(inode))
+        else if FS::is_forwarder(&inode)
         {
-            self.follow_fs(inode).AddEvent(inode.foreign_id, OnEvent);
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            self.follow_fs_by_id_mut(mount_id)
+                .add_event(foreign_id, on_event);
         }
         else
         {
-            self.events.push({id: id, OnEvent: OnEvent});
+            self.events.push(Event {id: id, on_event: Some(on_event)});
         }
     }
+    
 
-    public HandleEvent(id : number) : void {
-        const inode = self.inodes[id];
-        if(this.is_forwarder(inode))
+    pub fn handle_event(&mut self, id : usize) {
+        let inode = &self.inodes[id];
+        if FS::is_forwarder(inode)
         {
-            self.follow_fs(inode).HandleEvent(inode.foreign_id);
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            self.follow_fs_by_id_mut(mount_id)
+                .handle_event(foreign_id);
         }
         //message.Debug("number of events: " + self.events.length);
-        var newevents = [];
-        for(var i=0; i<this.events.length; i++) {
-            if(this.events[i].id === id) {
-                self.events[i].OnEvent();
+        let mut newevents : Vec<Event> = Vec::new();
+        for i in 0..self.events.len() {
+            if self.events[i].id == id {
+                self.events[i].on_event.unwrap()(); // unwrap than call
             } else {
-                newevents.push(this.events[i]);
+                newevents.push(Event {
+                    id: id,
+                    on_event: Some(self.events[i].on_event.unwrap())
+                });
             }
         }
         self.events = newevents;
     }
 
+
+    /*
     public load_from_json(fs : Map<string, any>) : void {
         debug_assert!(fs, "Invalid fs passed to load_from_json");
 
@@ -374,8 +387,9 @@ impl FS {
         //}
     }
 
-    public LoadRecursive(data : Map<string, any>, parentid : number) : void {
-        var inode = self.CreateInode();
+
+    pub fun LoadRecursive(data : Map<String, any>, parentid : number) : void {
+        let inode = self.create_inode();
 
         const name = data.get(JSONFS_IDX_NAME);
         inode.size = data.get(JSONFS_IDX_SIZE);
@@ -420,10 +434,11 @@ impl FS {
             self.LoadRecursive(children[i], parentid);
         }
     }
+    */
 
 
     // -----------------------------------------------------
-    */
+    
     /**
      * @private
      * @param {Inode} inode
@@ -640,14 +655,11 @@ impl FS {
     pub fn create_directory(&mut self, name: String, parentid: Option<usize>) -> usize {
         
         if parentid.is_some() {
-            if FS::is_forwarder(&self.inodes[parentid.unwrap()])
+            let parent_node = &self.inodes[parentid.unwrap()];
+            if FS::is_forwarder(parent_node)
             {
-                let mount_id = {
-                    self.inodes[parentid.unwrap()].mount_id.unwrap()
-                };
-                let foreign_parentid = {
-                    self.inodes[parentid.unwrap()].foreign_id
-                };
+                let mount_id = parent_node.mount_id.unwrap();
+                let foreign_parentid = parent_node.foreign_id;
                 let foreign_fs: &mut FS = self.follow_fs_by_id_mut(mount_id);
                 let foreign_id = foreign_fs.create_directory(name, foreign_parentid);
                 return self.create_forwarder(mount_id, foreign_id);
