@@ -9,6 +9,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+async-trait = "0.1.82"
+serde = {version = "^1.0.210", features = ["derive"]}
 tokio = {version = "1.40.0",  features = ["rt", "macros", "sync"]}
 
 [features]
