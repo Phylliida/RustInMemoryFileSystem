@@ -1,0 +1,29 @@
+[package]
+name = "example-tokio-wasm"
+version = "0.0.0"
+authors = ["The Wasmtime Project Developers"]
+edition = "2021"
+publish = false
+
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.32.0"
+tokio = {version = "1.40.0",  features = ["rt", "macros"]}
+
+[features]
+default = ["tokio_unstable"]
+tokio_unstable = []
+
+[target.wasm32-wasi-p1-threads]
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[build]
+rustflags = ["--cfg", "tokio_unstable"]
+rustdocflags = ["--cfg", "tokio_unstable"] 
+
+[toolchain]
+channel = "nightly"
+targets = ["wasm32-wasip1"]
