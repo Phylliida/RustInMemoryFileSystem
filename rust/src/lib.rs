@@ -17,6 +17,7 @@ use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::str::from_utf8;
+use std::cmp::min;
 
 pub fn print_debug(msg: String) {
     println!("{}", msg);
@@ -1079,35 +1080,51 @@ impl FS {
 
         return 0;
     }
+    */
+    pub fn write(&mut self, id : usize, offset : usize, count : usize, buffer : Option<UInt8Array>) {
+        self.notify_listeners(id, &"write".to_owned());
+        let inode = &self.inodes[id];
 
-    public async Write(id : number, offset : number, count : number, buffer : UInt8Array) : Promise<void>{
-        self.NotifyListeners(id, "write");
-        var inode = self.inodes[id];
-
-        if(this.is_forwarder(inode))
+        if FS::is_forwarder(inode)
         {
-            const foreign_id = inode.foreign_id;
-            await self.follow_fs(inode).Write(foreign_id, offset, count, buffer);
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            self.follow_fs_by_id_mut(mount_id)
+                .write(foreign_id, offset, count, buffer);
             return;
         }
 
-        var data = await self.get_buffer(id);
+        let bigger_size = ((((offset + count) as f64)  * 3.0) / 2.0).floor() as usize;
 
-        if(!data || data.length < (offset+count)) {
-            await self.ChangeSize(id, Math.floor(((offset+count)*3)/2));
-            inode.size = offset + count;
-            data = await self.get_buffer(id);
-        } else
-        if(inode.size < (offset+count)) {
-            inode.size = offset + count;
-        }
-        if(buffer)
-        {
-            data.set(buffer.subarray(0, count), offset);
-        }
-        await self.set_data(id, data);
+        // gotta do everything using entry to avoid double mutable self accesses
+
+        // Add if doesn't exist
+        self.inodedata.entry(id)
+            // Would love to only do a single entry, however this cannot happen before and_modify bc wrong return value :(
+            .or_insert_with(|| UInt8Array::new(bigger_size));
+
+        self.inodedata.entry(id)
+            // resize if too small
+            .and_modify(|data : &mut UInt8Array| {
+                let old_size = data.data.len();
+                if old_size < (offset + count) {
+                    let mut new_data = vec![0u8; bigger_size].into_boxed_slice();
+                    new_data[0..old_size].copy_from_slice(
+                        &data.data[0..old_size]
+                    );
+                    data.data = new_data;
+                }
+            // write data
+            }).and_modify(|data : &mut UInt8Array| {
+                if buffer.is_some()
+                {
+                    data.data[offset..offset+count].copy_from_slice(
+                        &buffer.unwrap().data[0..count]);
+                }        
+            });
+
+        self.inodes[id].size = offset + count;
     }
-    */
     
     pub fn read(&self, inodeid : usize, offset : usize, count : usize) -> Option<&[u8]> {
         let inode = &self.inodes[inodeid];
@@ -1141,34 +1158,34 @@ impl FS {
 
         return parent_inode.direntries.get(name).map(|&x| x);
     }
-    /*
+    
 
-    public CountUsedInodes() : number {
-        let count = self.inodes.length;
-        for(const { fs, backtrack } of self.mounts)
+    pub fn count_used_inodes(&self) -> u64 {
+        let mut count = self.inodes.len() as u64;
+        for mount_info in &self.mounts
         {
-            count += fs.CountUsedInodes();
+            count += mount_info.fs.count_used_inodes();
 
             // Forwarder inodes don't count.
-            count -=  backtrack.size;
+            count -= mount_info.backtrack.len() as u64;
         }
         return count;
     }
 
-    public CountFreeInodes() : number {
-        let count = 1024 * 1024;
-        for(const { fs } of self.mounts)
+    pub fn count_free_inodes(&self) -> u64 {
+        let mut count = 1024 * 1024;
+        for mount_info in &self.mounts
         {
-            count += fs.CountFreeInodes();
+            count += mount_info.fs.count_free_inodes();
         }
         return count;
     }
 
-    public GetTotalSize() : number {
-        let size = self.used_size;
-        for(const { fs } of self.mounts)
+    pub fn get_total_size(&self) -> u64 {
+        let mut size = self.used_size;
+        for mount_info in &self.mounts
         {
-            size += fs.GetTotalSize();
+            size += mount_info.fs.get_total_size();
         }
         return size;
         //var size = 0;
@@ -1179,7 +1196,6 @@ impl FS {
         //return size;
     }
 
-    */
     pub fn get_space(&self) -> u64 {
         let mut size = self.total_size;
         for mount_info in &self.mounts
@@ -1356,6 +1372,11 @@ impl FS {
         debug_assert!(idx < self.inodes.len(), "Filesystem get_buffer: idx {} does not point to an inode", idx);
         return self.inodedata.get(&idx);
     }
+
+    pub fn get_buffer_mut(&mut self, idx : usize) -> Option<&mut UInt8Array> {
+        debug_assert!(idx < self.inodes.len(), "Filesystem get_buffer: idx {} does not point to an inode", idx);
+        return self.inodedata.get_mut(&idx);
+    }
     /**
      * @private
      * @param {number} idx
@@ -1421,22 +1442,30 @@ impl FS {
 
         return inode;
     }
-    /*
-    public async ChangeSize(idx : number, newsize : number) : Promise<void> {
-        var inode = self.GetInode(idx);
-        var temp = await self.get_data(idx, 0, inode.size);
+    pub fn change_size(&mut self, idx : usize, newsize : usize) {
+        let inode : &mut INode = self.get_inode_mutable(idx);
         //message.Debug("change size to: " + newsize);
-        if(newsize === inode.size) return;
-        var data = new UInt8Array(newsize);
-        inode.size = newsize;
-        if(temp)
-        {
-            var size = Math.min(temp.length, inode.size);
-            data.set(temp.subarray(0, size), 0);
+        if newsize == inode.size {
+            return;
         }
-        await self.set_data(idx, data);
+        inode.size = newsize;
+
+        // use entry to avoid multiple mutable accesses to self
+        self.inodedata.entry(idx)
+            // resize if exists
+            .and_modify(|data : &mut UInt8Array| {
+                let old_size = data.data.len();
+                let mut new_data = vec![0u8; newsize].into_boxed_slice();
+                let copy_size = min(old_size, newsize);
+                new_data[0..copy_size].copy_from_slice(
+                    &data.data[0..copy_size]
+                );
+                data.data = new_data;
+            })
+            // insert if not exists
+            .or_insert_with(|| UInt8Array::new(newsize));
+        
     }
-    */
 
     pub fn search_path(&mut self, path : &String) -> SearchResult {
         //path = path.replace(/\/\//g, "/");
