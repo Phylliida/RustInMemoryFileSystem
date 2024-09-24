@@ -1,6 +1,9 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
+//  TODO: STATUS_ON_STORAGE STUFF
+
+
 use serde::{Serialize, Deserialize};
 
 type Number = i64;
@@ -259,13 +262,13 @@ struct Event {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Uint8Array {
+pub struct UInt8Array {
     data: Box<[u8]>
 }
 
-impl Uint8Array {
+impl UInt8Array {
     pub fn new(size: usize) -> Self {
-        Uint8Array {
+        UInt8Array {
             data:  vec![0u8; size].into_boxed_slice(),
         }
     }
@@ -279,16 +282,16 @@ trait FileStorageInterface {
     * @param {string} sha256sum
     * @param {number} offset
     * @param {number} count
-    * @return {!Promise<Uint8Array>} null if file does not exist.
+    * @return {!Promise<UInt8Array>} null if file does not exist.
     */
-    async fn read(&mut self, sha256sum: String, offset: i32, count: i32) -> Uint8Array;
+    async fn read(&mut self, sha256sum: String, offset: i32, count: i32) -> UInt8Array;
     /**
     * Add a read-only file to the filestorage.
     * @param {string} sha256sum
-    * @param {!Uint8Array} data
+    * @param {!UInt8Array} data
     * @return {!Promise}
     */
-    async fn cache(&mut self, sha256sum: String, data: Uint8Array) -> ();
+    async fn cache(&mut self, sha256sum: String, data: UInt8Array) -> ();
 
     /**
     * Call this when the file won't be used soon, e.g. when a file closes or when this immutable
@@ -341,7 +344,7 @@ struct FS{
     #[serde(skip)]
     storage : Option<Arc<dyn FileStorageInterface>>,
     qidcounter : QIDCounter,
-    inodedata : HashMap<usize, Uint8Array>,
+    inodedata : HashMap<usize, UInt8Array>,
     total_size : Number,
     used_size : Number,
     mounts : Vec<FSMountInfo>
@@ -393,17 +396,17 @@ impl FS {
     }
     /*
 
-    public get_state() : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | Uint8Array | FSMountInfo> {
-        var state : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | Uint8Array | FSMountInfo> = [];
+    public get_state() : Array<number | Array<INode> | Array<Array<number | UInt8Array>> | UInt8Array | FSMountInfo> {
+        var state : Array<number | Array<INode> | Array<Array<number | UInt8Array>> | UInt8Array | FSMountInfo> = [];
     
         state[0] = self.inodes;
         state[1] = self.qidcounter.last_qidnumber;
-        state[2] = [] as Array<Array<number | Uint8Array>>;
+        state[2] = [] as Array<Array<number | UInt8Array>>;
         for(const [id, data] of Object.entries(this.inodedata))
         {
             if((this.inodes[id].mode & S_IFDIR) === 0)
             {
-                state[2].push([id, data] as Array<number | Uint8Array>);
+                state[2].push([id, data] as Array<number | UInt8Array>);
             }
         }
         state[3] = self.total_size;
@@ -414,7 +417,7 @@ impl FS {
     }
     
 
-    public set_state(state : Array<number | Array<INode> | Array<Array<number | Uint8Array>> | FSMountInfo>) {
+    public set_state(state : Array<number | Array<INode> | Array<Array<number | UInt8Array>> | FSMountInfo>) {
         self.inodes = state[0].map(state => { const inode = new Inode(0); inode.set_state(state); return inode; });
         self.qidcounter.last_qidnumber = state[1] as number;
         self.inodedata = {};
@@ -883,7 +886,7 @@ impl FS {
         }
         var id = self.CreateFile(filename, parentid);
         var x = self.inodes[id];
-        var data = new Uint8Array(str.length);
+        var data = new UInt8Array(str.length);
         x.size = str.length;
         for(var j = 0; j < str.length; j++) {
             data[j] = str.charCodeAt(j);
@@ -893,9 +896,9 @@ impl FS {
     }
 
     /**
-     * @param {Uint8Array} buffer
+     * @param {UInt8Array} buffer
      */
-    public async CreateBinaryFile(filename : string, parentid : number, buffer : Uint8Array) : number {
+    public async CreateBinaryFile(filename : string, parentid : number, buffer : UInt8Array) : number {
         const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
         {
@@ -906,7 +909,7 @@ impl FS {
         }
         var id = self.CreateFile(filename, parentid);
         var x = self.inodes[id];
-        var data = new Uint8Array(buffer.length);
+        var data = new UInt8Array(buffer.length);
         data.set(buffer);
         await self.set_data(id, data);
         x.size = buffer.length;
@@ -1077,7 +1080,7 @@ impl FS {
         return 0;
     }
 
-    public async Write(id : number, offset : number, count : number, buffer : Uint8Array) : Promise<void>{
+    public async Write(id : number, offset : number, count : number, buffer : UInt8Array) : Promise<void>{
         self.NotifyListeners(id, "write");
         var inode = self.inodes[id];
 
@@ -1304,50 +1307,38 @@ impl FS {
         }
         return SUCCESS;
     }
-    /*
-    public async DeleteData(idx : number) : Promise<void> {
-        const inode = self.inodes[idx];
-        if(this.is_forwarder(inode))
+    
+    pub fn delete_data(&mut self, idx : usize) {
+        let inode = &self.inodes[idx];
+        if FS::is_forwarder(inode)
         {
-            await self.follow_fs(inode).DeleteData(inode.foreign_id);
-            return;
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            self.follow_fs_by_id_mut(mount_id)
+                .delete_data(foreign_id);
         }
-        inode.size = 0;
-        delete self.inodedata[idx];
+        self.inodedata.remove(&idx);
+        let mut_inode = &mut self.inodes[idx];
+        mut_inode.size = 0;
     }
 
     /**
      * @private
      * @param {number} idx
-     * @return {!Promise<Uint8Array>} The buffer that contains the file contents, which may be larger
+     * @return {!Promise<UInt8Array>} The buffer that contains the file contents, which may be larger
      *      than the data itself. To ensure that any modifications done to this buffer is reflected
      *      to the file, call set_data with the modified buffer.
      */
-    public async get_buffer(idx : number) : Promise<Uint8Array> {
-        const inode = self.inodes[idx];
-        debug_assert!(inode, `Filesystem get_buffer: idx ${idx} does not point to an inode`);
-
-        if(this.inodedata[idx])
-        {
-            return self.inodedata[idx];
-        }
-        else if(inode.status === STATUS_ON_STORAGE)
-        {
-            debug_assert!(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
-            return await self.storage.read(inode.sha256sum, 0, inode.size);
-        }
-        else
-        {
-            return null;
-        }
+    pub fn get_buffer(&self, idx : usize) -> Option<&UInt8Array> {
+        debug_assert!(idx < self.inodes.len(), "Filesystem get_buffer: idx {} does not point to an inode", idx);
+        return self.inodedata.get(&idx);
     }
-    */
     /**
      * @private
      * @param {number} idx
      * @param {number} offset
      * @param {number} count
-     * @return {!Promise<Uint8Array>}
+     * @return {!Promise<UInt8Array>}
      */
     pub fn get_data(&self, idx : usize, offset : usize, count : usize) -> Option<&[u8]> {
         debug_assert!(idx < self.inodes.len(), "Filesystem get_data: idx {} does not point to an inode", idx);
@@ -1361,22 +1352,16 @@ impl FS {
             return None;
         }
     }
-    /*
     /**
      * @private
      * @param {number} idx
-     * @param {Uint8Array} buffer
+     * @param {UInt8Array} buffer
      */
-    public async set_data(idx : number, buffer : UInt8Array) : Promise<void> {
+    pub fn set_data(&mut self, idx : usize, buffer : UInt8Array) {
         // Current scheme: Save all modified buffers into local inodedata.
-        self.inodedata[idx] = buffer;
-        if(this.inodes[idx].status === STATUS_ON_STORAGE)
-        {
-            self.inodes[idx].status = STATUS_OK;
-            self.storage.uncache(this.inodes[idx].sha256sum);
-        }
+        self.inodedata.insert(idx, buffer);
     }
-    */
+    
     /**
      * @param {number} idx
      * @return {!Inode}
@@ -1419,7 +1404,7 @@ impl FS {
         var temp = await self.get_data(idx, 0, inode.size);
         //message.Debug("change size to: " + newsize);
         if(newsize === inode.size) return;
-        var data = new Uint8Array(newsize);
+        var data = new UInt8Array(newsize);
         inode.size = newsize;
         if(temp)
         {
@@ -1638,7 +1623,7 @@ impl FS {
             let as_bytes: &[u8] = name.as_bytes();
             size += 13 + 8 + 1 + 2 + as_bytes.len();
         }
-        let mut uint8array = Uint8Array::new(size);
+        let mut uint8array = UInt8Array::new(size);
 
         let data: &mut [u8] = &mut *uint8array.data;
         
@@ -1778,7 +1763,7 @@ impl FS {
         if let Some(caps) = inode.caps.as_ref() {
             return caps.data.len();
         }
-        inode.caps = Some(Uint8Array::new(20));
+        inode.caps = Some(UInt8Array::new(20));
         let caps: &mut [u8] = &mut *inode.caps.as_mut().unwrap().data;
         // format is little endian
         // note: getxattr returns -EINVAL if using revision 1 format.
@@ -2252,7 +2237,7 @@ struct INode {
     symlink : String,
     mode : i32,
     qid : QID,
-    caps : Option<Uint8Array>,
+    caps : Option<UInt8Array>,
     nlinks : i32,
     sha256sum : String,
 
