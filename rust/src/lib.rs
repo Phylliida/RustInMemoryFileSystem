@@ -18,46 +18,45 @@ pub fn print_debug(msg: String) {
     println!("{}", msg);
 }
 
-pub fn marshall_u8(val: u8, data: &mut [u8], offset: u64) -> u64 {
+fn marshall_u8(val: u8, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);
-    cursor.write_u8(val);
+    let _ = cursor.write_u8(val);
     return cursor.position();
 }
 
-pub fn marshall_u16(val: u16, data: &mut [u8], offset: u64) -> u64 {
+fn marshall_u16(val: u16, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);
-    cursor.write_u16::<BigEndian>(val);
+    let _ = cursor.write_u16::<BigEndian>(val);
     return cursor.position();
 }
 
-pub fn marshall_u32(val: u32, data: &mut [u8], offset: u64) -> u64 {
+fn marshall_u32(val: u32, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);
-    cursor.write_u32::<BigEndian>(val);
+    let _ = cursor.write_u32::<BigEndian>(val);
     return cursor.position();
 }
 
-pub fn marshall_u64(val: u64, data: &mut [u8], offset: u64) -> u64 {
+fn marshall_u64(val: u64, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);
-    cursor.write_u64::<BigEndian>(val);
+    let _ = cursor.write_u64::<BigEndian>(val);
     return cursor.position();
 }
 
-pub fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
-    let mut cursor = Cursor::new(data);
+fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
     // write string length
-    cursor.set_position(
-        marshall_u16(val.len() as u16, data, offset)
-    );
+    let new_offset = marshall_u16(val.len() as u16, data, offset);
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(new_offset);
     let as_bytes: &[u8] = val.as_bytes();
-    cursor.write_all(as_bytes);
+    let _ = cursor.write_all(as_bytes);
     return cursor.position();
 }
 
-pub fn marshall_qid(val: &QID, data: &mut [u8], offset: u64) -> u64 {
+fn marshall_qid(val: &QID, data: &mut [u8], offset: u64) -> u64 {
     let mut offset_tmp = offset;
     offset_tmp = marshall_u8(val.r#type, data, offset_tmp);
     offset_tmp = marshall_u32(val.version, data, offset_tmp);
@@ -192,7 +191,7 @@ const JSONFS_IDX_SHA256: i32 = 6;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct QIDCounter {
-    last_qidnumber: i32
+    last_qidnumber: u64
 }
 
 type EventFn = fn() -> ();
@@ -1488,7 +1487,7 @@ impl FS {
         }
     }
 
-    pub fn fill_directory(&self, dirid: usize) {
+    pub fn fill_directory(&mut self, dirid: usize) {
         let inode = &self.inodes[dirid];
         if FS::is_forwarder(inode)
         {
@@ -1501,18 +1500,15 @@ impl FS {
             return;
         }
 
-        let size = 0;
+        let mut size = 0;
         for name in inode.direntries.keys()
         {
             let as_bytes: &[u8] = name.as_bytes();
             size += 13 + 8 + 1 + 2 + as_bytes.len();
         }
-        let uint8array = Uint8Array::new(size);
-        inode.size = size;
+        let mut uint8array = Uint8Array::new(size);
 
-        self.inodedata.insert(dirid, uint8array);
-
-        let mut data = uint8array.data.as_ref();
+        let data: &mut [u8] = &mut *uint8array.data;
         
         let inode_again = &self.inodes[dirid];
         let mut offset : u64 = 0x0;
@@ -1526,6 +1522,9 @@ impl FS {
             offset = marshall_u8((child.mode >> 12) as u8, data, offset);
             offset = marshall_string(&name, data, offset);
         }
+        self.inodes[dirid].size = size;
+        
+        self.inodedata.insert(dirid, uint8array);
     }
 
     /*
