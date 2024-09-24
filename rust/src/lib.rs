@@ -309,6 +309,10 @@ struct SearchResult {
     name: String,
     forward_path: Option<String>
 }
+struct RecursiveListResult {
+    parentid: usize,
+    name: String
+}
 
 
 
@@ -1474,40 +1478,51 @@ impl FS {
             forward_path: forward_path
         };
     }
-    /*
     // -----------------------------------------------------
+
 
     /**
      * @param {number} dirid
      * @param {Array<{parentid: number, name: string}>} list
      */
-    public GetRecursiveList(dirid : number, list : Array<{parentid: number, name: string}>) : void {
-        if(this.is_forwarder(this.inodes[dirid]))
+    pub fn get_recursive_list(&mut self, dirid : usize, list : &mut Vec<RecursiveListResult>) {
+        if FS::is_forwarder(&self.inodes[dirid])
         {
-            const foreign_fs = self.follow_fs(this.inodes[dirid]);
-            const foreign_dirid = self.inodes[dirid].foreign_id;
-            const mount_id = self.inodes[dirid].mount_id;
-
-            const foreign_start = list.length;
-            foreign_fs.GetRecursiveList(foreign_dirid, list);
-            for(let i = foreign_start; i < list.length; i++)
+            let mount_id = self.inodes[dirid].mount_id.unwrap();
+            let foreign_dirid = self.inodes[dirid].foreign_id.unwrap();
+            let foreign_start = list.len();
+            let foreign_fs = self.follow_fs_by_id_mut(mount_id);
+            
+            foreign_fs.get_recursive_list(foreign_dirid, list);
+            for i in foreign_start..list.len()
             {
                 list[i].parentid = self.get_forwarder(mount_id, list[i].parentid);
             }
             return;
         }
-        for(const [name, id] of self.inodes[dirid].direntries)
+        // we need to do make subdir array to make borrow checker happy since get_forwarder is mut
+        // theoretically we could use recursive closure and avoid allocation, but don't do that https://smallcultfollowing.com/babysteps/blog/2013/04/30/the-case-of-the-recurring-closure/ https://stackoverflow.com/questions/16946888/is-it-possible-to-make-a-recursive-closure-in-rust
+        let mut subdirs : Vec<usize> = Vec::new();
+        for (name, id) in self.inodes[dirid].direntries.iter()
         {
-            if(name !== "." && name !== "..")
+            if name != "." && name != ".."
             {
-                list.push({ parentid: dirid, name });
-                if(this.IsDirectory(id))
+                list.push( RecursiveListResult {
+                    parentid: dirid,
+                    name: name.clone() 
+                });
+
+                if self.is_directory(*id)
                 {
-                    self.GetRecursiveList(id, list);
+                    subdirs.push(*id);
                 }
             }
         }
+        for subdir_id in subdirs {
+            self.get_recursive_list(subdir_id, list)
+        }
     }
+    /*
 
     public RecursiveDelete(path : string) : void {
         var toDelete = [];
