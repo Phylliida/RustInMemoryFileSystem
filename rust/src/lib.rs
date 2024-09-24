@@ -621,17 +621,17 @@ impl FS {
      * @param {number} parentid
      * @param {string} name
      */
-    pub fn unlink_from_dir(&mut self, parentid : usize, name : String) {
+    pub fn unlink_from_dir(&mut self, parentid : usize, name : &String) {
         
         debug_assert!(!FS::is_forwarder(&self.inodes[parentid]), "Filesystem: Can't unlink from forwarders");
         debug_assert!(self.is_directory(parentid), "Filesystem: Can't unlink from non-directories");
 
-        let idx = self.search(parentid, &name).unwrap();
+        let idx = self.search(parentid, name).unwrap();
         let is_directory = self.is_directory(idx);
         let parent_inode = &mut self.inodes[parentid];
 
         
-        let exists = parent_inode.direntries.remove(&name);
+        let exists = parent_inode.direntries.remove(name);
         if exists.is_none()
         {
             debug_assert!(false, "Filesystem: Can't unlink non-existent file: {}", name);
@@ -809,7 +809,7 @@ impl FS {
         }
         x.qid.r#type = (S_IFDIR >> 8) as u8;
         self.push_inode(x, parentid, name);
-        self.notify_listeners(self.inodes.len()-1, "newdir".to_owned());
+        self.notify_listeners(self.inodes.len()-1, &"newdir".to_owned());
         return self.inodes.len()-1;
     }
     /*
@@ -1104,19 +1104,19 @@ impl FS {
         }
         await self.set_data(id, data);
     }
-
-    public async Read(inodeid : number, offset : number, count : number) : Promise<Uint8Array> {
-        const inode = self.inodes[inodeid];
-        if(this.is_forwarder(inode))
+    */
+    
+    pub fn read(&self, inodeid : usize, offset : usize, count : usize) -> Option<&[u8]> {
+        let inode = &self.inodes[inodeid];
+        if FS::is_forwarder(&inode)
         {
-            const foreign_id = inode.foreign_id;
-            return await self.follow_fs(inode).Read(foreign_id, offset, count);
+            let foreign_id = inode.foreign_id.unwrap();
+            return self.follow_fs_immutable(inode).read(foreign_id, offset, count);
         }
 
-        return await self.get_data(inodeid, offset, count);
+        return self.get_data(inodeid, offset, count);
     }
     
-    */
     pub fn search(&mut self, parentid : usize, name : &String) -> Option<usize> {
         let parent_inode = &self.inodes[parentid];
 
@@ -1256,45 +1256,55 @@ impl FS {
         self.link_under_dir(parentid, targetid, name);
         return 0;
     }
-
-    public Unlink(parentid : number, name : string) : number {
-        if(name === "." || name === "..")
+    */
+    pub fn unlink(&mut self, parentid : usize, name : &String) -> i32 {
+        if name == "." || name == ".."
         {
             // Also guarantees that root cannot be deleted.
-            return -EPERM;
+            return EPERM;
         }
-        const idx = self.Search(parentid, name);
-        const inode = self.inodes[idx];
-        const parent_inode = self.inodes[parentid];
+        let idx_cond = self.search(parentid, name);
+
+        if idx_cond.is_none() {
+            return ENOENT;
+        }
+
+        let idx = idx_cond.unwrap();
+
+        let inode = &self.inodes[idx];
+        let parent_inode = &self.inodes[parentid];
         //message.Debug("Unlink " + inode.name);
 
         // forward if necessary
-        if(this.is_forwarder(parent_inode))
+        if FS::is_forwarder(parent_inode)
         {
-            debug_assert!(this.is_forwarder(inode), "Children of forwarders should be forwarders");
+            debug_assert!(FS::is_forwarder(inode), "Children of forwarders should be forwarders");
 
-            const foreign_parentid = parent_inode.foreign_id;
-            return self.follow_fs(parent_inode).Unlink(foreign_parentid, name);
+            let foreign_parentid = parent_inode.foreign_id;
+            let mount_id = parent_inode.mount_id.unwrap();
+            return self.follow_fs_by_id_mut(mount_id)
+                .unlink(foreign_parentid.unwrap(), name);
 
             // Keep the forwarder dangling - file is still accessible.
         }
 
-        if(this.IsDirectory(idx) && !this.IsEmpty(idx))
+        if self.is_directory(idx) && !self.is_empty(idx)
         {
-            return -ENOTEMPTY;
+            return ENOTEMPTY;
         }
 
         self.unlink_from_dir(parentid, name);
-
-        if(inode.nlinks === 0)
+        
+        let inode_mut : &mut INode = &mut self.inodes[idx];
+        if inode_mut.nlinks == 0
         {
             // don't delete the content. The file is still accessible
-            inode.status = STATUS_UNLINKED;
-            self.NotifyListeners(idx, "delete");
+            inode_mut.status = STATUS_UNLINKED;
+            self.notify_listeners(idx, &"delete".to_owned());
         }
-        return 0;
+        return SUCCESS;
     }
-
+    /*
     public async DeleteData(idx : number) : Promise<void> {
         const inode = self.inodes[idx];
         if(this.is_forwarder(inode))
@@ -1331,7 +1341,7 @@ impl FS {
             return null;
         }
     }
-
+    */
     /**
      * @private
      * @param {number} idx
@@ -1339,25 +1349,19 @@ impl FS {
      * @param {number} count
      * @return {!Promise<Uint8Array>}
      */
-    public async get_data(idx : number, offset : number, count : number) : Promise<Uint8Array> {
-        const inode = self.inodes[idx];
-        debug_assert!(inode, `Filesystem get_data: idx ${idx} does not point to an inode`);
-
-        if(this.inodedata[idx])
+    pub fn get_data(&self, idx : usize, offset : usize, count : usize) -> Option<&[u8]> {
+        debug_assert!(idx < self.inodes.len(), "Filesystem get_data: idx {} does not point to an inode", idx);
+        
+        if self.inodedata.contains_key(&idx)
         {
-            return self.inodedata[idx].subarray(offset, offset + count);
-        }
-        else if(inode.status === STATUS_ON_STORAGE)
-        {
-            debug_assert!(inode.sha256sum, "Filesystem get_data: found inode on server without sha256sum");
-            return await self.storage.read(inode.sha256sum, offset, count);
+            return Some(&self.inodedata[&idx].data[offset..offset + count]);
         }
         else
         {
-            return null;
+            return None;
         }
     }
-
+    /*
     /**
      * @private
      * @param {number} idx
@@ -1522,44 +1526,47 @@ impl FS {
             self.get_recursive_list(subdir_id, list)
         }
     }
-    /*
+    
 
-    public RecursiveDelete(path : string) : void {
-        var toDelete = [];
-        var ids = self.SearchPath(path);
-        if(ids.id === -1) return;
+    pub fn recursive_delete(&mut self, path : &String) {
+        let mut to_delete : Vec<RecursiveListResult> = Vec::new();
+        let ids = self.search_path(path);
+        if ids.id.is_none() {
+            return;
+        }
 
-        self.GetRecursiveList(ids.id, toDelete);
+        self.get_recursive_list(ids.id.unwrap(), &mut to_delete);
 
-        for(var i=toDelete.length-1; i>=0; i--)
+        for i in (0..to_delete.len()).rev()
         {
-            const ret = self.Unlink(toDelete[i].parentid, toDelete[i].name);
-            debug_assert!(ret === 0, "Filesystem RecursiveDelete failed at parent=" + toDelete[i].parentid +
-                ", name='" + toDelete[i].name + "' with error code: " + (-ret));
+            let ret = self.unlink(to_delete[i].parentid, &to_delete[i].name);
+            debug_assert!(ret == SUCCESS, "Filesystem RecursiveDelete failed at parent={}, name='{}' with error code: {}", to_delete[i].parentid, to_delete[i].name, -ret);
         }
     }
 
-    public DeleteNode(path : string) : void {
-        var ids = self.SearchPath(path);
-        if(ids.id === -1) return;
+    pub fn delete_node(&mut self, path : &String) {
+        let ids = self.search_path(path);
+        if ids.id.is_none() {
+            return;
+        } 
 
-        if((this.inodes[ids.id].mode&S_IFMT) === S_IFREG){
-            const ret = self.Unlink(ids.parentid, ids.name);
-            debug_assert!(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
+        if (self.inodes[ids.id.unwrap()].mode & S_IFMT) == S_IFREG{
+            let ret = self.unlink(ids.parentid.unwrap(), &ids.name);
+            debug_assert!(ret == SUCCESS, "Filesystem DeleteNode failed with error code: {}", -ret);
         }
-        else if((this.inodes[ids.id].mode&S_IFMT) === S_IFDIR){
-            self.RecursiveDelete(path);
-            const ret = self.Unlink(ids.parentid, ids.name);
-            debug_assert!(ret === 0, "Filesystem DeleteNode failed with error code: " + (-ret));
+        else if (self.inodes[ids.id.unwrap()].mode & S_IFMT) == S_IFDIR {
+            self.recursive_delete(path);
+            let ret = self.unlink(ids.parentid.unwrap(), &ids.name);
+            debug_assert!(ret == SUCCESS, "Filesystem DeleteNode failed with error code: {}", -ret);
         }
     }
-    */
-    pub fn notify_listeners(&self, id: usize, action: String) {
+    
+    pub fn notify_listeners(&self, id: usize, action: &String) {
 
     }
 
     /** @param {*=} info */
-    pub fn notify_listeners_with_data(&self, id: usize, action: String, info: Option<NotifyInfo>) {
+    pub fn notify_listeners_with_data(&self, id: usize, action: &String, info: Option<NotifyInfo>) {
         //if(info==undefined)
         //    info = {};
 
@@ -2204,20 +2211,20 @@ impl FS {
 
         return Array.from(dir.direntries.keys()).filter(path => path !== "." && path !== "..");
     }
+    */
 
-    public read_file(file : string) : Uint8Array {
-        const p = self.SearchPath(file);
+    pub fn read_file(&mut self, file : &String) -> Option<&[u8]> {
+        let p = self.search_path(file);
 
-        if(p.id === -1)
+        if p.id.is_none()
         {
-            return Promise.resolve(null);
+            return None;
         }
 
-        const inode = self.GetInode(p.id);
+        let inode = self.get_inode(p.id.unwrap());
 
-        return self.Read(p.id, 0, inode.size);
+        return self.read(p.id.unwrap(), 0, inode.size);
     }
-    */
 }
 
 #[derive(Serialize, Deserialize, Debug)]
