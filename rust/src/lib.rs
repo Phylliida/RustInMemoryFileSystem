@@ -135,6 +135,8 @@ const MAX_REPLYBUFFER_SIZE : i32 = 16 * 1024 * 1024;
 // TODO
 // flush
 
+const SUCCESS : i32 = 0;
+
 const EPERM  : i32 = 1;       /* Operation not permitted */
 const ENOENT : i32 = 2;      /* No such file or directory */
 const EEXIST : i32 = 17;      /* File exists */
@@ -301,6 +303,15 @@ struct NotifyInfo {
 }
 
 
+struct SearchResult {
+    id: Option<usize>,
+    parentid: Option<usize>,
+    name: String,
+    forward_path: Option<String>
+}
+
+
+
 
 /**
  * @constructor
@@ -427,7 +438,7 @@ impl FS {
         if inode.status == STATUS_OK || inode.status == STATUS_ON_STORAGE {
             on_event();
         }
-        else if FS::is_forwarder(&inode)
+        else if FS::is_forwarder(inode)
         {
             let mount_id = inode.mount_id.unwrap();
             let foreign_id = inode.foreign_id.unwrap();
@@ -1105,7 +1116,7 @@ impl FS {
     pub fn search(&mut self, parentid : usize, name : &String) -> Option<usize> {
         let parent_inode = &self.inodes[parentid];
 
-        if FS::is_forwarder(&parent_inode)
+        if FS::is_forwarder(parent_inode)
         {
             let mount_id = parent_inode.mount_id.unwrap();
             let foreign_parentid = parent_inode.foreign_id.unwrap();
@@ -1367,13 +1378,30 @@ impl FS {
         debug_assert!(idx < self.inodes.len(), "Filesystem GetInode: out of range idx: {}", idx);
 
         let inode = &self.inodes[idx];
-        if FS::is_forwarder(&inode)
+        if FS::is_forwarder(inode)
         {
             let mount_id = inode.mount_id.unwrap();
             let foreign_id = inode.foreign_id.unwrap();
             return self.follow_fs_by_id(mount_id)
                 .get_inode(foreign_id);
         }
+
+        return inode;
+    }
+
+    pub fn get_inode_mutable(&mut self, idx : usize) -> &mut INode {
+        //debug_assert!(!isNaN(idx), "Filesystem GetInode: NaN idx");
+        debug_assert!(idx < self.inodes.len(), "Filesystem GetInode: out of range idx: {}", idx);
+
+        let inode_immutable : &INode = &self.inodes[idx];
+        if FS::is_forwarder(inode_immutable)
+        {
+            let mount_id = inode_immutable.mount_id.unwrap();
+            let foreign_id = inode_immutable.foreign_id.unwrap();
+            return self.follow_fs_by_id_mut(mount_id)
+                .get_inode_mutable(foreign_id);
+        }
+        let inode: &mut INode = &mut self.inodes[idx];
 
         return inode;
     }
@@ -1392,32 +1420,61 @@ impl FS {
         }
         await self.set_data(idx, data);
     }
+    */
 
-    public SearchPath(path : string) : object {
+    pub fn search_path(&mut self, path : &String) -> SearchResult {
         //path = path.replace(/\/\//g, "/");
-        path = path.replace("//", "/");
-        var walk = path.split("/");
-        if(walk.length > 0 && walk[walk.length - 1].length === 0) walk.pop();
-        if(walk.length > 0 && walk[0].length === 0) walk.shift();
-        const n = walk.length;
+        let path_fixed = path.replace("//", "/");
+        let mut walk: Vec<&str> = path_fixed.split('/').collect();
+        if walk.len() > 0 && walk[walk.len() - 1].len() == 0 {
+            let _  = walk.pop();
+        }
+        if walk.len() > 0 && walk[0].len() == 0 {
+            let _ = walk.remove(0);
+        }
+        let n = walk.len();
 
-        var parentid = -1;
-        var id = 0;
-        let forward_path = null;
-        for(var i=0; i<n; i++) {
+        let mut parentid : Option<usize> = None;
+        let mut id : Option<usize> = Some(0);
+        let mut forward_path : Option<String> = None;
+        for i in 0..n {
             parentid = id;
-            id = self.Search(parentid, walk[i]);
-            if(!forward_path && self.is_forwarder(this.inodes[parentid]))
-            {
-                forward_path = "/" + walk.slice(i).join("/");
+            if parentid.is_some() {
+                id = self.search(parentid.unwrap(), &walk[i].to_owned());
+                if forward_path.is_none() 
+                    && FS::is_forwarder(&self.inodes[parentid.unwrap()])
+                {
+                    forward_path = Some("/".to_owned() + &walk[i..].join("/"));
+                }
             }
-            if(id === -1) {
-                if(i < n-1) return {id: -1, parentid: -1, name: walk[i], forward_path }; // one name of the path cannot be found
-                return {id: -1, parentid: parentid, name: walk[i], forward_path}; // the last element in the path does not exist, but the parent
+            else {
+                id = None;
+            }
+            if id.is_none() {
+                if i < n-1 {
+                    return SearchResult {
+                        id: None,
+                        parentid: None,
+                        name: walk[i].to_owned(),
+                        forward_path: forward_path
+                    };
+                }
+                return SearchResult {
+                    id: None,
+                    parentid: parentid,
+                    name: walk[i].to_owned(),
+                    forward_path: forward_path
+                };
             }
         }
-        return {id: id, parentid: parentid, name: walk[i], forward_path};
+        return SearchResult {
+            id: id,
+            parentid: parentid,
+            name: walk[walk.len() - 1].to_owned(),
+            forward_path: forward_path
+        };
     }
+    /*
     // -----------------------------------------------------
 
     /**
@@ -1613,50 +1670,51 @@ impl FS {
         if FS::is_forwarder(inode)
         {
             let foreign_id = inode.foreign_id.unwrap();
-            return self.follow_fs_immutable(&inode).is_directory(foreign_id);
+            return self.follow_fs_immutable(inode).is_directory(foreign_id);
         }
         return (inode.mode & S_IFMT) == S_IFDIR;
     }
-    /*
     /**
      * @param {number} idx
      * @return {boolean}
      */
-    public IsEmpty(idx : number) : boolean {
-        const inode = self.inodes[idx];
-        if(this.is_forwarder(inode))
+    pub fn is_empty(&self, idx : usize) -> bool {
+        let inode = &self.inodes[idx];
+        if FS::is_forwarder(inode)
         {
-            return self.follow_fs(inode).IsDirectory(inode.foreign_id);
+            return self.follow_fs_immutable(&inode).is_empty(inode.foreign_id.unwrap());
         }
-        for(const name of inode.direntries.keys())
+        for name in inode.direntries.keys()
         {
-            if(name !== "." && name !== "..") return false;
+            if name != "." && name != ".."
+            {
+                return false;
+            }
         }
         return true;
     }
-
+    
     /**
      * @param {number} idx
      * @return {!Array<string>} List of children names
      */
-    public GetChildren(idx : number) : Array<string> {
-        debug_assert!(this.IsDirectory(idx), "Filesystem: cannot get children of non-directory inode");
-        const inode = self.inodes[idx];
-        if(this.is_forwarder(inode))
+    pub fn get_children(&self, idx : usize) -> Vec<String> {
+        debug_assert!(self.is_directory(idx), "Filesystem: cannot get children of non-directory inode");
+        let inode = &self.inodes[idx];
+        if FS::is_forwarder(inode)
         {
-            return self.follow_fs(inode).GetChildren(inode.foreign_id);
+            return self.follow_fs_immutable(inode).get_children(inode.foreign_id.unwrap());
         }
-        const children = [];
-        for(const name of inode.direntries.keys())
+        let mut children : Vec<String> = Vec::new();
+        for name in inode.direntries.keys()
         {
-            if(name !== "." && name !== "..")
+            if name != "." && name != ".."
             {
-                children.push(name);
+                children.push(name.to_string());
             }
         }
         return children;
     }
-    */
     /**
      * @param {number} idx
      * @return {number} Local idx of parent
@@ -1681,7 +1739,7 @@ impl FS {
         }
     }
 
-    /*
+    
     // -----------------------------------------------------
 
     // only support for security.capabilities
@@ -1693,49 +1751,52 @@ impl FS {
     //   http://man7.org/linux/man-pages/man7/capabilities.7.html
     //   http://man7.org/linux/man-pages/man8/getcap.8.html
     //   http://man7.org/linux/man-pages/man3/libcap.3.html
-    public PrepareCAPs(id : number) : number {
-        var inode = self.GetInode(id);
-        if(inode.caps) return inode.caps.length;
-        inode.caps = new Uint8Array(20);
+    pub fn prepare_caps(&mut self, id : usize) -> usize {
+        let inode: &mut INode = self.get_inode_mutable(id);
+        if let Some(caps) = inode.caps.as_ref() {
+            return caps.data.len();
+        }
+        inode.caps = Some(Uint8Array::new(20));
+        let caps: &mut [u8] = &mut *inode.caps.as_mut().unwrap().data;
         // format is little endian
         // note: getxattr returns -EINVAL if using revision 1 format.
         // note: getxattr presents revision 3 as revision 2 when revision 3 is not needed.
         // magic_etc (revision=0x02: 20 bytes)
-        inode.caps[0]  = 0x00;
-        inode.caps[1]  = 0x00;
-        inode.caps[2]  = 0x00;
-        inode.caps[3]  = 0x02;
+        caps[0]  = 0x00;
+        caps[1]  = 0x00;
+        caps[2]  = 0x00;
+        caps[3]  = 0x02;
 
         // lower
         // permitted (first 32 capabilities)
-        inode.caps[4]  = 0xFF;
-        inode.caps[5]  = 0xFF;
-        inode.caps[6]  = 0xFF;
-        inode.caps[7]  = 0xFF;
+        caps[4]  = 0xFF;
+        caps[5]  = 0xFF;
+        caps[6]  = 0xFF;
+        caps[7]  = 0xFF;
         // inheritable (first 32 capabilities)
-        inode.caps[8]  = 0xFF;
-        inode.caps[9]  = 0xFF;
-        inode.caps[10] = 0xFF;
-        inode.caps[11] = 0xFF;
+        caps[8]  = 0xFF;
+        caps[9]  = 0xFF;
+        caps[10] = 0xFF;
+        caps[11] = 0xFF;
 
         // higher
         // permitted (last 6 capabilities)
-        inode.caps[12] = 0x3F;
-        inode.caps[13] = 0x00;
-        inode.caps[14] = 0x00;
-        inode.caps[15] = 0x00;
+        caps[12] = 0x3F;
+        caps[13] = 0x00;
+        caps[14] = 0x00;
+        caps[15] = 0x00;
         // inheritable (last 6 capabilities)
-        inode.caps[16] = 0x3F;
-        inode.caps[17] = 0x00;
-        inode.caps[18] = 0x00;
-        inode.caps[19] = 0x00;
+        caps[16] = 0x3F;
+        caps[17] = 0x00;
+        caps[18] = 0x00;
+        caps[19] = 0x00;
 
-        return inode.caps.length;
+        return caps.len();
     }
 
     // -----------------------------------------------------
 
-    */
+    
      /**
      * @private
      * @param {number} idx Local idx of inode.
@@ -1749,7 +1810,7 @@ impl FS {
         debug_assert!(inode.nlinks == 0,
             "Filesystem: attempted to convert an inode into forwarder before unlinking the inode");
 
-        if FS::is_forwarder(&inode) 
+        if FS::is_forwarder(inode) 
         {
             self.mounts[inode.mount_id.unwrap()].backtrack.remove(&inode.foreign_id.unwrap());
         }
@@ -1820,20 +1881,20 @@ impl FS {
             return *result.unwrap();
         }
     }
-    /*
+    
 
     /**
      * @private
      * @param {Inode} inode
      */
-    public delete_forwarder(inode : INode) : void {
-        debug_assert!(this.is_forwarder(inode), "Filesystem delete_forwarder: expected forwarder");
+    pub fn delete_forwarder(&mut self, inode : &mut INode) {
+        debug_assert!(FS::is_forwarder(inode), "Filesystem delete_forwarder: expected forwarder");
 
         inode.status = STATUS_INVALID;
-        self.mounts[inode.mount_id].backtrack.delete(inode.foreign_id);
+        self.mounts[inode.mount_id.unwrap()].backtrack.remove(&inode.foreign_id.unwrap());
     }
 
-    */
+    
 
     pub fn follow_fs(&mut self, inode: &INode) -> &FS {
         debug_assert!(FS::is_forwarder(inode),
@@ -1879,7 +1940,7 @@ impl FS {
         return &mount.unwrap().fs;
     }
 
-    /*
+    
 
     /**
      * Mount another filesystem to given path.
@@ -1887,39 +1948,47 @@ impl FS {
      * @param {FS} fs
      * @return {number} inode id of mount point if successful, or -errno if mounting failed.
      */
-    public Mount(path : string, fs : FS) : number {
-        debug_assert!(fs.qidcounter === self.qidcounter,
+    pub fn mount(&mut self, path : &String, fs : FS) -> (Option<usize>, i32)  {
+        debug_assert!(fs.qidcounter.last_qidnumber == self.qidcounter.last_qidnumber,
             "Cannot mount filesystem whose qid numbers aren't synchronised with current filesystem.");
 
-        const path_infos = self.SearchPath(path);
+        let path_infos = self.search_path(path);
 
-        if(path_infos.parentid === -1)
+        if path_infos.parentid.is_none()
         {
-            dbg_log("Mount failed: parent for path not found: " + path, LOG_9P);
-            return -ENOENT;
+            print_debug(format!("Mount failed: parent for path not found: {}", path));
+            return (None, ENOENT);
         }
-        if(path_infos.id !== -1)
+        if path_infos.id.is_none()
         {
-            dbg_log("Mount failed: file already exists at path: " + path, LOG_9P);
-            return -EEXIST;
+            print_debug(format!("Mount failed: file already exists at path: {}", path));
+            return (None, EEXIST);
         }
-        if(path_infos.forward_path)
+        if path_infos.forward_path.is_some()
         {
-            const parent = self.inodes[path_infos.parentid];
-            const ret = self.follow_fs(parent).Mount(path_infos.forward_path, fs);
-            if(ret < 0) return ret;
-            return self.get_forwarder(parent.mount_id, ret);
+            let parent = &self.inodes[path_infos.parentid.unwrap()];
+            let parent_mount_id = parent.mount_id.unwrap();
+            let forward_path = path_infos.forward_path;
+            let (mount_id, mount_err) = self.follow_fs_by_id_mut(parent_mount_id)
+                .mount(&forward_path.unwrap(), fs);
+            if mount_id.is_none() {
+                return (None, mount_err);
+            } 
+            else {
+                return (Some(self.get_forwarder(parent_mount_id, mount_id.unwrap())),
+                SUCCESS);
+            }
         }
 
-        const mount_id = self.mounts.length;
-        self.mounts.push(new FSMountInfo(fs));
+        let mount_id = self.mounts.len();
+        self.mounts.push(FSMountInfo::new(fs));
 
-        const idx = self.create_forwarder(mount_id, 0);
-        self.link_under_dir(path_infos.parentid, idx, path_infos.name);
+        let idx = self.create_forwarder(mount_id, 0);
+        self.link_under_dir(path_infos.parentid.unwrap(), idx, path_infos.name);
 
-        return idx;
+        return (Some(idx), SUCCESS);
     }
-    
+    /*
     /**
      * @param {number} type
      * @param {number} start
