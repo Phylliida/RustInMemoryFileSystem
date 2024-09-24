@@ -12,6 +12,10 @@ use std::sync::Arc;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub fn print_debug(msg: String) {
+    println!("{}", msg);
+}
+
 
 // -------------------------------------------------
 // --------------------- 9P ------------------------
@@ -1256,24 +1260,27 @@ impl FS {
             self.storage.uncache(this.inodes[idx].sha256sum);
         }
     }
-
+    */
     /**
      * @param {number} idx
      * @return {!Inode}
      */
-    public GetInode(idx : number) : INode {
-        debug_assert!(!isNaN(idx), "Filesystem GetInode: NaN idx");
-        debug_assert!(idx >= 0 && idx < self.inodes.length, "Filesystem GetInode: out of range idx:" + idx);
+    pub fn get_inode(&self, idx : usize) -> &INode {
+        //debug_assert!(!isNaN(idx), "Filesystem GetInode: NaN idx");
+        debug_assert!(idx < self.inodes.len(), "Filesystem GetInode: out of range idx: {}", idx);
 
-        const inode = self.inodes[idx];
-        if(this.is_forwarder(inode))
+        let inode = &self.inodes[idx];
+        if FS::is_forwarder(&inode)
         {
-            return self.follow_fs(inode).GetInode(inode.foreign_id);
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            return self.follow_fs_by_id(mount_id)
+                .get_inode(foreign_id);
         }
 
         return inode;
     }
-
+    /*
     public async ChangeSize(idx : number, newsize : number) : Promise<void> {
         var inode = self.GetInode(idx);
         var temp = await self.get_data(idx, 0, inode.size);
@@ -1400,39 +1407,42 @@ impl FS {
         //}
     }
 
-    /*
-    public Check() : void {
-        for(var i=1; i<this.inodes.length; i++)
-        {
-            if(this.inodes[i].status === STATUS_INVALID) continue;
 
-            var inode = self.GetInode(i);
-            if(inode.nlinks < 0) {
-                message.Debug("Error in filesystem: negative nlinks=" + inode.nlinks + " at id =" + i);
+    pub fn check(&mut self) {
+        for i in 1..self.inodes.len()
+        {
+            if self.inodes[i].status == STATUS_INVALID {
+                continue;
+            } 
+
+            let inode = self.get_inode(i);
+            if inode.nlinks < 0 {
+                print_debug(format!("Error in filesystem: negative nlinks={} at id ={}", inode.nlinks, i).to_owned());
             }
 
-            if(this.IsDirectory(i))
+            if self.is_directory(i)
             {
-                const inode = self.GetInode(i);
-                if(this.IsDirectory(i) && self.GetParent(i) < 0) {
-                    message.Debug("Error in filesystem: negative parent id " + i);
+                if self.is_directory(i) && self.get_parent(i).is_none() {
+                    print_debug(format!("Error in filesystem: negative parent id {}", i).to_owned());
                 }
-                for(const [name, id] of inode.direntries)
+                
+                let inode_const = self.get_inode(i);
+                for (name, id) in inode_const.direntries.iter()
                 {
-                    if(name.length === 0) {
-                        message.Debug("Error in filesystem: inode with no name and id " + id);
+                    if name.len() == 0 {
+                        print_debug(format!("Error in filesystem: inode with no name and id {}", id).to_owned());
                     }
 
-                    for(const c of name) {
-                        if(c < 32) {
-                            message.Debug("Error in filesystem: Unallowed char in filename");
+                    for c in name.chars() {
+                        if (c as u32) < 32 {
+                            print_debug("Error in filesystem: Unallowed char in filename".to_owned());
                         }
                     }
                 }
             }
         }
     }
-
+    /*
 
     public FillDirectory(dirid: number) : void {
         const inode = self.inodes[dirid];
@@ -1539,29 +1549,32 @@ impl FS {
         }
         return children;
     }
-
+    */
     /**
      * @param {number} idx
      * @return {number} Local idx of parent
      */
-    public GetParent(idx : number) : number {
-        debug_assert!(this.IsDirectory(idx), "Filesystem: cannot get parent of non-directory inode");
+    pub fn get_parent(&mut self, idx : usize) -> Option<usize> {
+        debug_assert!(self.is_directory(idx), "Filesystem: cannot get parent of non-directory inode");
 
-        const inode = self.inodes[idx];
+        let inode = &self.inodes[idx];
 
-        if(this.should_be_linked(inode))
+        if FS::should_be_linked(inode)
         {
-            return inode.direntries.get("..");
+            return inode.direntries.get(&"..".to_owned()).map(|&x| x);
         }
         else
         {
-            const foreign_dirid = self.follow_fs(inode).GetParent(inode.foreign_id);
-            debug_assert!(foreign_dirid !== -1, "Filesystem: should not have invalid parent ids");
-            return self.get_forwarder(inode.mount_id, foreign_dirid);
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            let foreign_dirid = self.follow_fs_by_id_mut(mount_id)
+                .get_parent(foreign_id);
+            debug_assert!(foreign_dirid.is_some(), "Filesystem: should not have invalid parent ids");
+            return Some(self.get_forwarder(mount_id, foreign_dirid.unwrap()));
         }
     }
 
-
+    /*
     // -----------------------------------------------------
 
     // only support for security.capabilities
@@ -1665,15 +1678,14 @@ impl FS {
     pub fn is_forwarder(inode : &INode) -> bool {
         return inode.status == STATUS_FORWARDING;
     }
-    /*
     /**
      * Whether the inode it points to is a root of some filesystem.
      * @private
      * @param {number} idx
      * @return {boolean}
      */
-    public is_a_root(idx : number) : boolean {
-        return self.GetInode(idx).fid === 0;
+    pub fn is_a_root(&self, idx : usize) -> bool {
+        return self.get_inode(idx).fid == 0;
     }
 
     /**
@@ -1682,7 +1694,6 @@ impl FS {
      * @param {number} mount_id
      * @param {number} foreign_id
      * @return {number} Local idx of a forwarder to described inode.
-     */
      */
     pub fn get_forwarder(&mut self, mount_id : usize, foreign_id : usize) -> usize {
         let mount = &self.mounts.get(mount_id);
