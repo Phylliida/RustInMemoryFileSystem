@@ -692,7 +692,7 @@ impl FS {
 
         debug_assert!(false, "Error in Filesystem: Pushed inode with name = {} has no parent", name)
     }
-    /*
+    
     /**
          * Clones given inode to new idx, effectively diverting the inode to new idx value.
          * Hence, original idx value is now free to use without losing the original information.
@@ -701,58 +701,61 @@ impl FS {
          * @param {string} filename Name of target to divert.
          * @return {number} New idx of diversion.
          */
-    public divert(parentid : number, filename : string) : number {
-        const old_idx = self.Search(parentid, filename);
-        const old_inode = self.inodes[old_idx];
-        const new_inode = new Inode(-1);
-
-        debug_assert!(old_inode, "Filesystem divert: name (" + filename + ") not found");
-        debug_assert!(this.IsDirectory(old_idx) || old_inode.nlinks <= 1,
-            "Filesystem: can't divert hardlinked file '" + filename + "' with nlinks=" +
-            old_inode.nlinks);
+    pub fn divert(&mut self, parentid : usize, filename : &String) -> usize {
+        let old_idx = self.search(parentid, filename);
+        debug_assert!(old_idx.is_some(), "Filesystem divert: name ({}) not found", filename);
+        let old_inode = &mut self.inodes[old_idx.unwrap()];
+        
+        debug_assert!(self.is_directory(old_idx.unwrap()) || old_inode.nlinks <= 1,
+            "Filesystem: can't divert hardlinked file '{}' with nlinks={}",
+            filename, old_inode.nlinks);
 
         // Shallow copy is alright.
-        Object.assign(new_inode, old_inode);
+        let new_inode = INode {
+            ..*old_inode
+        };
 
-        const idx = self.inodes.length;
+        let idx = self.inodes.len();
         self.inodes.push(new_inode);
         new_inode.fid = idx;
 
         // Relink references
-        if(this.is_forwarder(old_inode))
+        if FS::is_forwarder(old_inode)
         {
-            self.mounts[old_inode.mount_id].backtrack.set(old_inode.foreign_id, idx);
+            self.mounts[old_inode.mount_id.unwrap()].backtrack.insert(old_inode.foreign_id.unwrap(), idx);
         }
-        if(this.should_be_linked(old_inode))
+        if FS::should_be_linked(old_inode)
         {
             self.unlink_from_dir(parentid, filename);
             self.link_under_dir(parentid, idx, filename);
         }
 
         // Update children
-        if(this.IsDirectory(old_idx) && !this.is_forwarder(old_inode))
+        if self.is_directory(old_idx.unwrap()) && !FS::is_forwarder(old_inode)
         {
-            for(const [name, child_id] of new_inode.direntries)
+            for (name, child_id) in new_inode.direntries.iter()
             {
-                if(name === "." || name === "..") continue;
-                if(this.IsDirectory(child_id))
+                if name == "." || name == ".." {
+                    continue;
+                }
+                if self.is_directory(*child_id)
                 {
-                    self.inodes[child_id].direntries.set("..", idx);
+                    self.inodes[*child_id].direntries.insert("..".to_owned(), idx);
                 }
             }
         }
 
         // Relocate local data if any.
-        self.inodedata[idx] = self.inodedata[old_idx];
-        delete self.inodedata[old_idx];
+        self.inodedata.insert(idx, self.inodedata[&old_idx.unwrap()]);
+        self.inodedata.remove(&old_idx.unwrap());
 
         // Retire old reference information.
-        old_inode.direntries = new Map();
+        old_inode.direntries = HashMap::new();
         old_inode.nlinks = 0;
 
         return idx;
     }
-
+    
 
 
     /**
@@ -762,14 +765,33 @@ impl FS {
      * @param {!Inode} src_inode
      * @param {!Inode} dest_inode
      */
-    public copy_inode(src_inode : INode, dest_inode : INode) : void {
-        Object.assign(dest_inode, src_inode, {
-            fid: dest_inode.fid,
-            direntries: dest_inode.direntries,
-            nlinks: dest_inode.nlinks,
-        });
+    pub fn copy_inode(src_inode : INode, mut dest_inode : INode) {
+        // dest_inode.direntries = src_inode.direntries
+        dest_inode.status = src_inode.status;
+        dest_inode.size = src_inode.size;
+        dest_inode.uid = src_inode.uid;
+        dest_inode.gid = src_inode.gid;
+        // dest_inode.fid = src_inode.fid
+        dest_inode.ctime = src_inode.ctime;
+        dest_inode.atime = src_inode.atime;
+        dest_inode.mtime = src_inode.mtime;
+        dest_inode.major = src_inode.major;
+        dest_inode.minor = src_inode.minor;
+        dest_inode.symlink = src_inode.symlink;
+        dest_inode.mode = src_inode.mode;
+        dest_inode.qid = QID {
+            r#type: src_inode.qid.r#type,
+            version: src_inode.qid.version,
+            path: src_inode.qid.path
+        };
+        dest_inode.caps = src_inode.caps;
+        // dest_inode.nlinks = src_inode.nlinks
+        dest_inode.sha256sum = src_inode.sha256sum;
+        dest_inode.locks = src_inode.locks;
+        dest_inode.mount_id = src_inode.mount_id;
+        dest_inode.foreign_id = src_inode.foreign_id;
     }
-    */
+    
 
     pub fn create_inode(&mut self) -> INode {
         //console.log("CreateInode", Error().stack);
@@ -816,27 +838,29 @@ impl FS {
         self.notify_listeners(self.inodes.len()-1, &"newdir".to_owned());
         return self.inodes.len()-1;
     }
-    /*
+    
 
-    public CreateFile(filename : string, parentid : number) : number {
-        const parent_inode = self.inodes[parentid];
-        if(this.is_forwarder(parent_inode))
+    pub fn create_file(&mut self, filename : &String, parentid : usize) -> usize {
+        let parent_inode = &self.inodes[parentid];
+        if FS::is_forwarder(parent_inode)
         {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = self.follow_fs(parent_inode).CreateFile(filename, foreign_parentid);
-            return self.create_forwarder(parent_inode.mount_id, foreign_id);
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let foreign_parentid = parent_inode.foreign_id.unwrap();
+            let foreign_id = self.follow_fs_by_id_mut(parent_inode_mount_id)
+                .create_file(filename, foreign_parentid);
+            return self.create_forwarder(parent_inode_mount_id, foreign_id);
         }
-        var x = self.CreateInode();
+        let mut x = self.create_inode();
         x.uid = self.inodes[parentid].uid;
         x.gid = self.inodes[parentid].gid;
-        x.qid.r#type = S_IFREG >> 8;
-        x.mode = (this.inodes[parentid].mode & 0x1B6) | S_IFREG;
-        self.PushInode(x, parentid, filename);
-        self.NotifyListeners(this.inodes.length-1, "newfile");
-        return self.inodes.length-1;
+        x.qid.r#type = (S_IFREG >> 8) as u8;
+        x.mode = (self.inodes[parentid].mode & 0x1B6) | S_IFREG;
+        self.push_inode(x, Some(parentid), filename);
+        self.notify_listeners(self.inodes.len()-1, &"newfile".to_owned());
+        return self.inodes.len()-1;
     }
 
-
+    /*
     public CreateNode(filename: string, parentid: number, major: number, minor: number) : number {
         const parent_inode = self.inodes[parentid];
         if(this.is_forwarder(parent_inode))
@@ -957,66 +981,72 @@ impl FS {
             await self.DeleteData(id);
         }
     }
-
+    */
     /**
-     * @return {!Promise<number>} 0 if success, or -errno if failured.
+     * @return {!Promise<number>} 0 if success, or errno if failured.
      */
-    public async Rename(olddirid: number, oldname: string, newdirid: number, newname: string) : Promise<number> {
+    pub fn rename(&mut self, olddirid: usize, oldname: &String, newdirid: usize, newname: &String) -> i32 {
         // message.Debug("Rename " + oldname + " to " + newname);
-        if((olddirid === newdirid) && (oldname === newname)) {
-            return 0;
+        if (olddirid == newdirid) && (oldname == newname) {
+            return SUCCESS;
         }
-        var oldid = self.Search(olddirid, oldname);
-        if(oldid === -1)
+        let oldid = self.search(olddirid, oldname);
+        if oldid.is_none()
         {
-            return -ENOENT;
+            return ENOENT;
         }
 
         // For event notification near end of method.
-        var oldpath = self.GetFullPath(olddirid) + "/" + oldname;
+        let oldpath = self.get_full_path(olddirid) + "/" + oldname;
 
-        var newid = self.Search(newdirid, newname);
-        if(newid !== -1) {
-            const ret = self.Unlink(newdirid, newname);
-            if(ret < 0) return ret;
+        let newid = self.search(newdirid, newname);
+        if newid.is_some() {
+            let ret = self.unlink(newdirid, newname);
+            if ret != SUCCESS {
+                return ret;
+            }
         }
 
-        var idx = oldid; // idx contains the id which we want to rename
-        var inode = self.inodes[idx];
-        const olddir = self.inodes[olddirid];
-        const newdir = self.inodes[newdirid];
+        let idx = oldid.unwrap(); // idx contains the id which we want to rename
+        let inode = &mut self.inodes[idx];
+        let olddir = &self.inodes[olddirid];
+        let newdir = &self.inodes[newdirid];
 
-        if(!this.is_forwarder(olddir) && !this.is_forwarder(newdir))
+        if !FS::is_forwarder(olddir) && !FS::is_forwarder(newdir)
         {
             // Move inode within current filesystem.
 
             self.unlink_from_dir(olddirid, oldname);
             self.link_under_dir(newdirid, idx, newname);
 
-            inode.qid.version++;
+            inode.qid.version += 1;
         }
-        else if(this.is_forwarder(olddir) && olddir.mount_id === newdir.mount_id)
+        else if FS::is_forwarder(olddir) && newdir.mount_id.is_some() && olddir.mount_id.unwrap() == newdir.mount_id.unwrap()
         {
             // Move inode within the same child filesystem.
+            
+            let old_dir_mount_id = olddir.mount_id.unwrap();
+            let old_dir_foreign_id = olddir.foreign_id.unwrap();
+            let new_dir_foreign_id = newdir.foreign_id.unwrap();
+            let ret = self.follow_fs_by_id_mut(old_dir_mount_id)
+                .rename(old_dir_foreign_id, oldname, new_dir_foreign_id, newname);
 
-            const ret = await
-                self.follow_fs(olddir).Rename(olddir.foreign_id, oldname, newdir.foreign_id, newname);
-
-            if(ret < 0) return ret;
+            if ret != SUCCESS {
+                return ret;
+            }
         }
-        else if(this.is_a_root(idx))
+        else if self.is_a_root(idx)
         {
             // The actual inode is a root of some descendant filesystem.
             // Moving mountpoint across fs not supported - needs to update all corresponding forwarders.
-            dbg_log("XXX: Attempted to move mountpoint (" + oldname + ") - skipped", LOG_9P);
-            return -EPERM;
+            print_debug(format!("XXX: Attempted to move mountpoint ({}) - skipped", oldname));
+            return EPERM;
         }
-        else if(!this.IsDirectory(idx) && self.GetInode(idx).nlinks > 1)
+        else if !self.is_directory(idx) && self.get_inode(idx).nlinks > 1
         {
             // Move hardlinked inode vertically in mount tree.
-            dbg_log("XXX: Attempted to move hardlinked file (" + oldname + ") " +
-                    "across filesystems - skipped", LOG_9P);
-            return -EPERM;
+            print_debug(format!("XXX: Attempted to move hardlinked file ({}) across filesystems - skipped", oldname));
+            return EPERM;
         }
         else
         {
@@ -1024,64 +1054,79 @@ impl FS {
 
             // Can't work with both old and new inode information without first diverting the old
             // information into a new idx value.
-            const diverted_old_idx = self.divert(olddirid, oldname);
-            const old_real_inode = self.GetInode(idx);
+            let diverted_old_idx = self.divert(olddirid, oldname);
+            let old_real_inode = self.get_inode(idx);
 
-            const data = await self.Read(diverted_old_idx, 0, old_real_inode.size);
+            let data = self.read(diverted_old_idx, 0, old_real_inode.size);
 
-            if(this.is_forwarder(newdir))
+            if FS::is_forwarder(newdir)
             {
+                let newdir_mount_id = newdir.mount_id.unwrap();
+                let new_dir_foreign_id = newdir.foreign_id.unwrap();
                 // Create new inode.
-                const foreign_fs = self.follow_fs(newdir);
-                const foreign_id = self.IsDirectory(diverted_old_idx) ?
-                    foreign_fs.CreateDirectory(newname, newdir.foreign_id) :
-                    foreign_fs.CreateFile(newname, newdir.foreign_id);
+                let mut foreign_fs = self.follow_fs_by_id_mut(newdir_mount_id);
+                let foreign_id = if self.is_directory(diverted_old_idx)
+                    { foreign_fs.create_directory(newname, Some(new_dir_foreign_id)) }
+                    else { foreign_fs.create_file(newname, new_dir_foreign_id) };
 
-                const new_real_inode = foreign_fs.GetInode(foreign_id);
-                self.copy_inode(old_real_inode, new_real_inode);
+                let new_real_inode = foreign_fs.get_inode(foreign_id);
+                FS::copy_inode(*old_real_inode, *new_real_inode);
 
                 // Point to this new location.
-                self.set_forwarder(idx, newdir.mount_id, foreign_id);
+                self.set_forwarder(idx, newdir_mount_id, foreign_id);
             }
             else
             {
                 // Replace current forwarder with real inode.
                 self.delete_forwarder(inode);
-                self.copy_inode(old_real_inode, inode);
+                FS::copy_inode(*old_real_inode, *inode);
 
                 // Link into new location in this filesystem.
                 self.link_under_dir(newdirid, idx, newname);
             }
 
             // Rewrite data to newly created destination.
-            await self.ChangeSize(idx, old_real_inode.size);
-            if(data && data.length)
+            self.change_size(idx, old_real_inode.size);
+            if data.is_some() && data.unwrap().len() > 0
             {
-                await self.Write(idx, 0, data.length, data);
+                self.write_arr(idx, 0, data.unwrap().len(), data);
             }
 
             // Move children to newly created destination.
-            if(this.IsDirectory(idx))
+            if self.is_directory(idx)
             {
-                for(const child_filename of self.GetChildren(diverted_old_idx))
+                for child_filename in self.get_children(diverted_old_idx)
                 {
-                    const ret = await self.Rename(diverted_old_idx, child_filename, idx, child_filename);
-                    if(ret < 0) return ret;
+                    let ret = self.rename(diverted_old_idx, &child_filename, idx, &child_filename);
+                    if ret != SUCCESS {
+                        return ret;
+                    }
                 }
             }
 
             // Perform destructive changes only after migration succeeded.
-            await self.DeleteData(diverted_old_idx);
-            const ret = self.Unlink(olddirid, oldname);
-            if(ret < 0) return ret;
+            self.delete_data(diverted_old_idx);
+            let ret = self.unlink(olddirid, oldname);
+            if ret != SUCCESS {
+                return ret;
+            }
         }
 
-        self.NotifyListeners(idx, "rename", {oldpath: oldpath});
+        self.notify_listeners_with_info(idx,
+            &"rename".to_owned(),
+            NotifyInfo {
+                oldpath: oldpath
+            }
+        );
 
-        return 0;
+        return SUCCESS;
     }
-    */
+
     pub fn write(&mut self, id : usize, offset : usize, count : usize, buffer : Option<UInt8Array>) {
+        self.write_arr(id, offset, count, buffer.map(|x| x.data.as_ref()));
+    }
+
+    pub fn write_arr(&mut self, id : usize, offset : usize, count : usize, buffer : Option<&[u8]>) {
         self.notify_listeners(id, &"write".to_owned());
         let inode = &self.inodes[id];
 
@@ -1090,7 +1135,7 @@ impl FS {
             let mount_id = inode.mount_id.unwrap();
             let foreign_id = inode.foreign_id.unwrap();
             self.follow_fs_by_id_mut(mount_id)
-                .write(foreign_id, offset, count, buffer);
+                .write_arr(foreign_id, offset, count, buffer);
             return;
         }
 
@@ -1119,7 +1164,7 @@ impl FS {
                 if buffer.is_some()
                 {
                     data.data[offset..offset+count].copy_from_slice(
-                        &buffer.unwrap().data[0..count]);
+                        &buffer.unwrap()[0..count]);
                 }        
             });
 
@@ -1313,7 +1358,7 @@ impl FS {
 
         let idx = idx_cond.unwrap();
 
-        let inode = &self.inodes[idx];
+        let inode = &mut self.inodes[idx];
         let parent_inode = &self.inodes[parentid];
         //message.Debug("Unlink " + inode.name);
 
@@ -1603,7 +1648,7 @@ impl FS {
     }
 
     /** @param {*=} info */
-    pub fn notify_listeners_with_data(&self, id: usize, action: &String, info: Option<NotifyInfo>) {
+    pub fn notify_listeners_with_info(&self, id: usize, action: &String, info: NotifyInfo) {
         //if(info==undefined)
         //    info = {};
 
@@ -1971,7 +2016,7 @@ impl FS {
     pub fn follow_fs_by_id(&self, mount_id : usize) -> &FS {
         let mount = self.mounts.get(mount_id);
 
-        debug_assert!(mount.is_none(), "Filesystem follow_fs: mount_id:{} should point to valid mounted FS", mount_id);
+        debug_assert!(mount.is_some(), "Filesystem follow_fs: mount_id:{} should point to valid mounted FS", mount_id);
         
         return &mount.unwrap().fs;
     }
@@ -1979,7 +2024,7 @@ impl FS {
     pub fn follow_fs_by_id_mut(&mut self, mount_id : usize) -> &mut FS {
         let mount = self.mounts.get_mut(mount_id);
 
-        debug_assert!(mount.is_none(), "Filesystem follow_fs: mount_id:{} should point to valid mounted FS", mount_id);
+        debug_assert!(mount.is_some(), "Filesystem follow_fs: mount_id:{} should point to valid mounted FS", mount_id);
         
         return &mut mount.unwrap().fs;
     }
@@ -1994,7 +2039,7 @@ impl FS {
         
         let mount = self.mounts.get(inode.mount_id.unwrap());
 
-        debug_assert!(mount.is_none(), "{}", msg);
+        debug_assert!(mount.is_some(), "{}", msg);
         
         return &mount.unwrap().fs;
     }
