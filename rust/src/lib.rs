@@ -345,8 +345,8 @@ struct FS{
     storage : Option<Arc<dyn FileStorageInterface>>,
     qidcounter : QIDCounter,
     inodedata : HashMap<usize, UInt8Array>,
-    total_size : Number,
-    used_size : Number,
+    total_size : u64,
+    used_size : u64,
     mounts : Vec<FSMountInfo>
 }
 
@@ -390,7 +390,7 @@ impl FS {
             //);
         };
 
-        result.create_directory("".to_owned(), None);
+        result.create_directory(&"".to_owned(), None);
 
         result
     }
@@ -576,7 +576,7 @@ impl FS {
      * @param {number} idx
      * @param {string} name
      */
-    pub fn link_under_dir(&mut self, parentid : usize, idx : usize, name : String) {
+    pub fn link_under_dir(&mut self, parentid : usize, idx : usize, name : &String) {
         // Checks
         {
             debug_assert!(!FS::is_forwarder(&self.inodes[parentid]),
@@ -587,7 +587,7 @@ impl FS {
                 "Filesystem: Can't link across filesystems apart from their root");
             debug_assert!(self.inodes[idx].nlinks >= 0,
                 "Filesystem: Found negative nlinks value of {}", self.inodes[idx].nlinks);
-            debug_assert!(!self.inodes[parentid].direntries.contains_key(&name),
+            debug_assert!(!self.inodes[parentid].direntries.contains_key(name),
                 "Filesystem: Name '{}' is already taken", name);
         }
         let is_directory = self.is_directory(idx);
@@ -672,7 +672,7 @@ impl FS {
             "Filesystem: Found negative nlinks value of {}", inode.nlinks);
     }
     
-    pub fn push_inode(&mut self, mut inode : INode, parentid : Option<usize>, name : String) {
+    pub fn push_inode(&mut self, mut inode : INode, parentid : Option<usize>, name : &String) {
         if parentid.is_some() {
             inode.fid = self.inodes.len();
             let inode_fid = inode.fid;
@@ -789,7 +789,7 @@ impl FS {
     }
 
     // Note: parentid = -1 for initial root directory.
-    pub fn create_directory(&mut self, name: String, parentid: Option<usize>) -> usize {
+    pub fn create_directory(&mut self, name: &String, parentid: Option<usize>) -> usize {
         
         if parentid.is_some() {
             let parent_node = &self.inodes[parentid.unwrap()];
@@ -1179,87 +1179,110 @@ impl FS {
         //return size;
     }
 
-    public GetSpace() : number {
-        let size = self.total_size;
-        for(const { fs } of self.mounts)
+    */
+    pub fn get_space(&self) -> u64 {
+        let mut size = self.total_size;
+        for mount_info in &self.mounts
         {
-            size += fs.GetSpace();
+            size += mount_info.fs.get_space();
         }
+        // Typo? I think this should be size?
         return self.total_size;
     }
-
     /**
      * XXX: Not ideal.
      * @param {number} idx
      * @return {string}
      */
-    public GetDirectoryName(idx : number) : string {
-        const parent_inode = self.inodes[this.GetParent(idx)];
-
-        if(this.is_forwarder(parent_inode))
-        {
-            return self.follow_fs(parent_inode).GetDirectoryName(this.inodes[idx].foreign_id);
+    pub fn get_directory_name(&mut self, idx : usize) -> String {
+        let parent_idx = self.get_parent(idx);
+        // Root directory.
+        if parent_idx.is_none() {
+            return "".to_owned();
         }
 
-        // Root directory.
-        if(!parent_inode) return "";
+        let parent_inode = &self.inodes[parent_idx.unwrap()];
 
-        for(const [name, childid] of parent_inode.direntries)
+        if FS::is_forwarder(parent_inode)
         {
-            if(childid === idx) return name;
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let foreign_id = self.inodes[idx].foreign_id.unwrap();
+            return self.follow_fs_by_id_mut(parent_inode_mount_id)
+                .get_directory_name(foreign_id);
+        }
+
+        for (name, childid) in parent_inode.direntries.iter()
+        {
+            if *childid == idx {
+                return name.clone();
+            }
         }
 
         debug_assert!(false, "Filesystem: Found directory inode whose parent doesn't link to it");
-        return "";
+        return "".to_owned();
     }
 
-    public GetFullPath(idx : number) : string {
-        debug_assert!(this.IsDirectory(idx), "Filesystem: Cannot get full path of non-directory inode");
+    pub fn get_full_path(&mut self, idx : usize) -> String {
+        debug_assert!(self.is_directory(idx), "Filesystem: Cannot get full path of non-directory inode");
 
-        var path = "";
+        let mut path : Vec<String> = Vec::new();
 
-        while(idx !== 0) {
-            path = "/" + self.GetDirectoryName(idx) + path;
-            idx = self.GetParent(idx);
+        let mut working_idx = idx;
+
+        while working_idx != 0 {
+            path.push(self.get_directory_name(idx));
+            path.push("/".to_owned());
+            let parent_idx = self.get_parent(working_idx);
+            if parent_idx.is_some() {
+                working_idx = parent_idx.unwrap()
+            }
+            else {
+                break;
+            }
         }
-        return path.substring(1);
+        path.reverse();
+        return path[1..].join("").to_owned();
     }
-
+    
     /**
      * @param {number} parentid
      * @param {number} targetid
      * @param {string} name
-     * @return {number} 0 if success, or -errno if failured.
+     * @return {number} 0 if success, or errno if failured.
      */
-    public Link(parentid : number, targetid : number, name : string) : number {
-        if(this.IsDirectory(targetid))
+    pub fn link(&mut self, parentid : usize, targetid : usize, name : &String) -> i32 {
+        if self.is_directory(targetid)
         {
-            return -EPERM;
+            return EPERM;
         }
 
-        const parent_inode = self.inodes[parentid];
-        const inode = self.inodes[targetid];
+        let parent_inode = &self.inodes[parentid];
+        let inode = &self.inodes[targetid];
 
-        if(this.is_forwarder(parent_inode))
+        if FS::is_forwarder(parent_inode)
         {
-            if(!this.is_forwarder(inode) || inode.mount_id !== parent_inode.mount_id)
+            if !FS::is_forwarder(inode) || inode.mount_id.unwrap() != parent_inode.mount_id.unwrap()
             {
-                dbg_log("XXX: Attempted to hardlink a file into a child filesystem - skipped", LOG_9P);
-                return -EPERM;
+                print_debug("XXX: Attempted to hardlink a file into a child filesystem - skipped".to_owned());
+                return EPERM;
             }
-            return self.follow_fs(parent_inode).Link(parent_inode.foreign_id, inode.foreign_id, name);
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let parent_inode_foreign_id = parent_inode.foreign_id.unwrap();
+            let inode_foreign_id = inode.foreign_id.unwrap();
+            return self.follow_fs_by_id_mut(parent_inode_mount_id)
+                .link(parent_inode_foreign_id, inode_foreign_id, name);
         }
 
-        if(this.is_forwarder(inode))
+        if FS::is_forwarder(inode)
         {
-            dbg_log("XXX: Attempted to hardlink file across filesystems - skipped", LOG_9P);
-            return -EPERM;
+            print_debug("XXX: Attempted to hardlink file across filesystems - skipped".to_owned());
+            return EPERM;
         }
 
         self.link_under_dir(parentid, targetid, name);
-        return 0;
+        return SUCCESS;
     }
-    */
+
     pub fn unlink(&mut self, parentid : usize, name : &String) -> i32 {
         if name == "." || name == ".."
         {
@@ -1991,7 +2014,7 @@ impl FS {
         self.mounts.push(FSMountInfo::new(fs));
 
         let idx = self.create_forwarder(mount_id, 0);
-        self.link_under_dir(path_infos.parentid.unwrap(), idx, path_infos.name);
+        self.link_under_dir(path_infos.parentid.unwrap(), idx, &path_infos.name);
 
         return (Some(idx), SUCCESS);
     }
