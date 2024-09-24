@@ -9,11 +9,60 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use async_trait::async_trait;
 use std::sync::Arc;
-
+use std::io::Cursor;
+use byteorder::{BigEndian, WriteBytesExt};
+use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn print_debug(msg: String) {
     println!("{}", msg);
+}
+
+pub fn marshall_u8(val: u8, data: &mut [u8], offset: u64) -> u64 {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    cursor.write_u8(val);
+    return cursor.position();
+}
+
+pub fn marshall_u16(val: u16, data: &mut [u8], offset: u64) -> u64 {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    cursor.write_u16::<BigEndian>(val);
+    return cursor.position();
+}
+
+pub fn marshall_u32(val: u32, data: &mut [u8], offset: u64) -> u64 {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    cursor.write_u32::<BigEndian>(val);
+    return cursor.position();
+}
+
+pub fn marshall_u64(val: u64, data: &mut [u8], offset: u64) -> u64 {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    cursor.write_u64::<BigEndian>(val);
+    return cursor.position();
+}
+
+pub fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
+    let mut cursor = Cursor::new(data);
+    // write string length
+    cursor.set_position(
+        marshall_u16(val.len() as u16, data, offset)
+    );
+    let as_bytes: &[u8] = val.as_bytes();
+    cursor.write_all(as_bytes);
+    return cursor.position();
+}
+
+pub fn marshall_qid(val: &QID, data: &mut [u8], offset: u64) -> u64 {
+    let mut offset_tmp = offset;
+    offset_tmp = marshall_u8(val.r#type, data, offset_tmp);
+    offset_tmp = marshall_u32(val.version, data, offset_tmp);
+    offset_tmp = marshall_u64(val.path, data, offset_tmp);
+    return offset_tmp;
 }
 
 
@@ -156,15 +205,18 @@ struct Event {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Uint8Array {
-
+pub struct Uint8Array {
+    data: Box<[u8]>
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct INodeData {
-    data: HashMap<i32, Uint8Array>    
-    //[key: number]: Uint8Array;
+impl Uint8Array {
+    pub fn new(size: usize) -> Self {
+        Uint8Array {
+            data:  vec![0; size].into_boxed_slice(),
+        }
+    }
 }
+
 
 #[async_trait]
 trait FileStorageInterface {
@@ -197,13 +249,6 @@ struct NotifyInfo {
 }
 
 
-impl INodeData {
-    pub fn new() -> INodeData {
-        INodeData {
-            data: HashMap::new()
-        }
-    }
-}
 
 /**
  * @constructor
@@ -229,7 +274,7 @@ struct FS{
     #[serde(skip)]
     storage : Option<Arc<dyn FileStorageInterface>>,
     qidcounter : QIDCounter,
-    inodedata : INodeData,
+    inodedata : HashMap<usize, Uint8Array>,
     total_size : Number,
     used_size : Number,
     mounts : Vec<FSMountInfo>
@@ -254,7 +299,7 @@ impl FS {
 
             //this.tar = new TAR(this);
 
-            inodedata : INodeData::new(),
+            inodedata : HashMap::new(),
 
             total_size : 256 * 1024 * 1024 * 1024,
             used_size : 0,
@@ -695,7 +740,7 @@ impl FS {
             x.gid = self.inodes[parentid.unwrap()].gid;
             x.mode = (self.inodes[parentid.unwrap()].mode & 0x1FF) | S_IFDIR;
         }
-        x.qid.r#type = S_IFDIR >> 8;
+        x.qid.r#type = (S_IFDIR >> 8) as u8;
         self.push_inode(x, parentid, name);
         self.notify_listeners(self.inodes.len()-1, "newdir".to_owned());
         return self.inodes.len()-1;
@@ -1442,39 +1487,48 @@ impl FS {
             }
         }
     }
-    /*
 
-    public FillDirectory(dirid: number) : void {
-        const inode = self.inodes[dirid];
-        if(this.is_forwarder(inode))
+    pub fn fill_directory(&self, dirid: usize) {
+        let inode = &self.inodes[dirid];
+        if FS::is_forwarder(inode)
         {
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
             // XXX: The ".." of a mountpoint should point back to an inode in this fs.
             // Otherwise, ".." gets the wrong qid and mode.
-            self.follow_fs(inode).FillDirectory(inode.foreign_id);
+            self.follow_fs_by_id_mut(mount_id)
+                .fill_directory(foreign_id);
             return;
         }
 
         let size = 0;
-        for(const name of inode.direntries.keys())
+        for name in inode.direntries.keys()
         {
-            size += 13 + 8 + 1 + 2 + texten.encode(name).length;
+            let as_bytes: &[u8] = name.as_bytes();
+            size += 13 + 8 + 1 + 2 + as_bytes.len();
         }
-        const data = self.inodedata[dirid] = new Uint8Array(size);
+        let uint8array = Uint8Array::new(size);
         inode.size = size;
 
-        let offset = 0x0;
-        for([name, id] of inode.direntries)
+        self.inodedata.insert(dirid, uint8array);
+
+        let mut data = uint8array.data.as_ref();
+        
+        let inode_again = &self.inodes[dirid];
+        let mut offset : u64 = 0x0;
+        for (name, id) in inode_again.direntries.iter()
         {
-            const child = self.GetInode(id);
-            offset += marshall.Marshall(
-                ["Q", "d", "b", "s"],
-                [child.qid,
-                offset+13+8+1+2+texten.encode(name).length,
-                child.mode >> 12,
-                name],
-                data, offset);
+            let as_bytes: &[u8] = name.as_bytes();
+            let child = self.get_inode(*id);
+            let end_pos : u64 = offset+13+8+1+2+(as_bytes.len() as u64);
+            offset = marshall_qid(&child.qid, data, offset);
+            offset = marshall_u64(end_pos, data, offset);
+            offset = marshall_u8((child.mode >> 12) as u8, data, offset);
+            offset = marshall_string(&name, data, offset);
         }
     }
+
+    /*
 
     public RoundToDirentry(dirid: number, offset_target: number) : number {
         const data = self.inodedata[dirid];
@@ -2032,9 +2086,9 @@ impl FS {
 #[derive(Serialize, Deserialize, Debug)]
 struct QID {
     // r# is needed because type is a keyword
-    r#type: i32,
-    version: i32,
-    path: i32
+    r#type: u8,
+    version: u32,
+    path: u64
 }
 
 /** @constructor */
@@ -2042,7 +2096,7 @@ struct QID {
 struct INode {
     direntries : HashMap<String, usize>,
     status : i32,
-    size : i32,
+    size : usize,
     uid : i32,
     gid : i32,
     fid : usize,
@@ -2065,7 +2119,7 @@ struct INode {
 }
 
 impl INode {
-    pub fn new(quidnumber : i32) -> INode {
+    pub fn new(quidnumber : u64) -> INode {
         INode {
             direntries : HashMap::new(), // maps filename to inode id
             status : 0,

@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 async-trait = "0.1.82"
+byteorder = "1.5.0"
 serde = {version = "^1.0.210", features = ["derive"]}
 tokio = {version = "1.40.0",  features = ["rt", "macros", "sync"]}
 
