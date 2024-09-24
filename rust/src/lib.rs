@@ -9,10 +9,11 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::io::Cursor;
-use byteorder::{BigEndian, WriteBytesExt};
+use std::io::{Cursor, Read};  // Add Read here
+use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::str::from_utf8;
 
 pub fn print_debug(msg: String) {
     println!("{}", msg);
@@ -25,11 +26,25 @@ fn marshall_u8(val: u8, data: &mut [u8], offset: u64) -> u64 {
     return cursor.position();
 }
 
+fn unmarshall_u8(data: &[u8], offset: u64) -> (u8, u64) {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    let result = cursor.read_u8();
+    return (result.unwrap(), cursor.position());
+}
+
 fn marshall_u16(val: u16, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);
     let _ = cursor.write_u16::<BigEndian>(val);
     return cursor.position();
+}
+
+fn unmarshall_u16(data: &[u8], offset: u64) -> (u16, u64) {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    let result = cursor.read_u16::<BigEndian>();
+    return (result.unwrap(), cursor.position());
 }
 
 fn marshall_u32(val: u32, data: &mut [u8], offset: u64) -> u64 {
@@ -39,6 +54,13 @@ fn marshall_u32(val: u32, data: &mut [u8], offset: u64) -> u64 {
     return cursor.position();
 }
 
+fn unmarshall_u32(data: &[u8], offset: u64) -> (u32, u64) {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    let result = cursor.read_u32::<BigEndian>();
+    return (result.unwrap(), cursor.position());
+}
+
 fn marshall_u64(val: u64, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);
@@ -46,15 +68,33 @@ fn marshall_u64(val: u64, data: &mut [u8], offset: u64) -> u64 {
     return cursor.position();
 }
 
+fn unmarshall_u64(data: &[u8], offset: u64) -> (u64, u64) {
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(offset);
+    let result = cursor.read_u64::<BigEndian>();
+    return (result.unwrap(), cursor.position());
+}
+
 fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
     // write string length
-    let new_offset = marshall_u16(val.len() as u16, data, offset);
+    let as_bytes: &[u8] = val.as_bytes();
+    let new_offset = marshall_u16(as_bytes.len() as u16, data, offset);
     let mut cursor = Cursor::new(data);
     cursor.set_position(new_offset);
-    let as_bytes: &[u8] = val.as_bytes();
     let _ = cursor.write_all(as_bytes);
     return cursor.position();
 }
+
+fn unmarshall_string(data: &[u8], offset: u64) -> (String, u64) {
+    let (str_len, new_offset) = unmarshall_u16(data, offset);
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(new_offset);
+    let mut buffer = vec![0u8; str_len as usize];
+    let result = cursor.read_exact(&mut buffer);
+    debug_assert!(result.is_ok(), "Not enough bytes to read data");
+    return (from_utf8(&buffer).unwrap().to_owned(), cursor.position());
+}
+
 
 fn marshall_qid(val: &QID, data: &mut [u8], offset: u64) -> u64 {
     let mut offset_tmp = offset;
@@ -62,6 +102,19 @@ fn marshall_qid(val: &QID, data: &mut [u8], offset: u64) -> u64 {
     offset_tmp = marshall_u32(val.version, data, offset_tmp);
     offset_tmp = marshall_u64(val.path, data, offset_tmp);
     return offset_tmp;
+}
+
+fn unmarshall_qid(data: &[u8], offset: u64) -> (QID, u64) {
+    let offset_tmp = offset;
+    let (r#type, offset_tmp2) = unmarshall_u8(data, offset_tmp);
+    let (version, offset_tmp3) = unmarshall_u32(data, offset_tmp2);
+    let (path, offset_tmp4) = unmarshall_u64(data, offset_tmp3);
+    let res = QID {
+        r#type: r#type,
+        version: version,
+        path: path
+    };
+    return (res, offset_tmp4);
 }
 
 
@@ -211,7 +264,7 @@ pub struct Uint8Array {
 impl Uint8Array {
     pub fn new(size: usize) -> Self {
         Uint8Array {
-            data:  vec![0; size].into_boxed_slice(),
+            data:  vec![0u8; size].into_boxed_slice(),
         }
     }
 }
@@ -1510,9 +1563,8 @@ impl FS {
 
         let data: &mut [u8] = &mut *uint8array.data;
         
-        let inode_again = &self.inodes[dirid];
         let mut offset : u64 = 0x0;
-        for (name, id) in inode_again.direntries.iter()
+        for (name, id) in inode.direntries.iter()
         {
             let as_bytes: &[u8] = name.as_bytes();
             let child = self.get_inode(*id);
@@ -1521,35 +1573,37 @@ impl FS {
             offset = marshall_u64(end_pos, data, offset);
             offset = marshall_u8((child.mode >> 12) as u8, data, offset);
             offset = marshall_string(&name, data, offset);
-        }
+        }        
         self.inodes[dirid].size = size;
         
         self.inodedata.insert(dirid, uint8array);
     }
 
-    /*
+    pub fn round_to_direntry(&self, dirid: usize, offset_target: u64) -> u64 {
+        debug_assert!(self.inodedata.contains_key(&dirid), "FS directory data for dirid={} should be generated", dirid);
+        let data: &[u8] = &*self.inodedata[&dirid].data;
+        debug_assert!(data.len() > 0, "FS directory should have at least an entry");
 
-    public RoundToDirentry(dirid: number, offset_target: number) : number {
-        const data = self.inodedata[dirid];
-        debug_assert!(data, `FS directory data for dirid=${dirid} should be generated`);
-        debug_assert!(data.length, "FS directory should have at least an entry");
-
-        if(offset_target >= data.length)
+        if offset_target >= data.len() as u64
         {
-            return data.length;
+            return data.len() as u64;
         }
 
-        let offset = 0;
-        while(true)
+        let mut offset : u64 = 0;
+        loop
         {
-            const next_offset = marshall.Unmarshall(["Q", "d"], data, { offset })[1];
-            if(next_offset > offset_target) break;
+            let (_qid, offset_after) = unmarshall_qid(data, offset);
+            let (next_offset, _offset_after_2) = unmarshall_u64(data, offset_after);
+            if next_offset > offset_target
+            {
+                break;
+            }
             offset = next_offset;
         }
 
         return offset;
     }
-    */
+
     /**
      * @param {number} idx
      * @return {boolean}
