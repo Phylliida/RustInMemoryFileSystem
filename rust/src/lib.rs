@@ -1151,11 +1151,14 @@ impl FS {
             self.change_size(idx, old_real_inode_size);
             
             // NOTE: MOVED THIS FROM ABOVE, undo if that breaks something (as far as I could tell it doesn't)
-            let data = self.read(diverted_old_idx, 0, old_real_inode_size);
+            let data_optional = self.read(diverted_old_idx, 0, old_real_inode_size);
 
-            if data.is_some() && data.unwrap().len() > 0
-            {
-                self.write_arr(idx, 0, data.unwrap().len(), data);
+            if let Some(data) = data_optional {
+                if !data.is_empty() {
+                    let len = data.len();
+                    let owned_data = data.to_vec(); // Convert &[u8] to Vec<u8>
+                    self.write_arr(idx, 0, len, Some(&owned_data));
+                }
             }
 
             // Move children to newly created destination.
