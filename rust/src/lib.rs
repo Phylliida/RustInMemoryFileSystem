@@ -20,6 +20,17 @@ pub extern "C" fn main() {
     else {
         println!("got no text");
     }
+
+    let directory = fs.create_directory(&"applebees wow".to_owned(), Some(fs.root_id));
+    let beesptr2 = fs.create_text_file(path, directory, &"applebeeeeeees2".to_owned());
+    println!("got file 2 {} with full path {}", beesptr2, fs.get_full_path(directory));
+    if let Some(result_text) = fs.read_text_file(&"/applebees wow/bees.bepis".to_owned()) {
+        println!("got text 2 {}", result_text);
+    }
+    else {
+        println!("got no text 2");
+    }
+    
 } 
 
 
