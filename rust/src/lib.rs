@@ -2211,7 +2211,7 @@ impl FS {
      * @param {FSLockRegion} request
      * @return {FSLockRegion} The first conflicting lock found, or null if requested lock is possible.
      */
-    pub fn get_lock(&self, id : usize, request : FSLockRegion) -> Option<FSLockRegion> {
+    pub fn get_lock(&self, id : usize, request : &FSLockRegion) -> Option<FSLockRegion> {
         let inode = &self.inodes[id];
 
         if FS::is_forwarder(inode)
@@ -2230,158 +2230,232 @@ impl FS {
         return None;
     }
 
-    /*
     /**
      * @param {number} id
      * @param {FSLockRegion} request
      * @param {number} flags
      * @return {number} One of P9_LOCK_SUCCESS / P9_LOCK_BLOCKED / P9_LOCK_ERROR / P9_LOCK_GRACE.
      */
-    public Lock(id : number, request : FSLockRegion, flags : number) : number {
-        const inode = self.inodes[id];
+    pub fn lock(&mut self, id : usize, request : &FSLockRegion, flags : i32) -> i32 {
+        let inode = &self.inodes[id];
 
-        if(this.is_forwarder(inode))
+        if FS::is_forwarder(inode)
         {
-            const foreign_id = inode.foreign_id;
-            return self.follow_fs(inode).Lock(foreign_id, request, flags);
+            let mount_id = inode.mount_id.unwrap();
+            let foreign_id = inode.foreign_id.unwrap();
+            return self.follow_fs_by_id_mut(mount_id)
+                .lock(foreign_id, request, flags);
         }
 
-        request = request.clone();
+        let request_copy_mut = &mut request.clone();
+        let request_copy = &*request_copy_mut;
 
         // (1) Check whether lock is possible before any modification.
-        if(request.r#type !== P9_LOCK_TYPE_UNLCK && self.GetLock(id, request))
+        if request_copy.r#type != P9_LOCK_TYPE_UNLCK && self.get_lock(id, request_copy).is_some()
         {
             return P9_LOCK_BLOCKED;
         }
-
-        // (2) Subtract requested region from locks of the same owner.
-        for(let i = 0; i < inode.locks.length; i++)
         {
-            const region = inode.locks[i];
-
-            debug_assert!(region.length > 0,
-                "Filesystem: Found non-positive lock region length: " + region.length);
-            debug_assert!(region.r#type === P9_LOCK_TYPE_RDLCK || region.r#type === P9_LOCK_TYPE_WRLCK,
-                "Filesystem: Found invalid lock type: " + region.r#type);
-            debug_assert!(!inode.locks[i-1] || inode.locks[i-1].start <= region.start,
-                "Filesystem: Locks should be sorted by starting offset");
-
-            // Skip to requested region.
-            if(region.start + region.length <= request.start) continue;
-
-            // Check whether we've skipped past the requested region.
-            if(request.start + request.length <= region.start) break;
-
-            // Skip over locks of different owners.
-            if(region.proc_id !== request.proc_id || region.client_id !== request.client_id)
+            let inode_mut = &mut self.inodes[id];
+            let mut i = 0;
+            // (2) Subtract requested region from locks of the same owner.
+            loop
             {
-                debug_assert!(!region.conflicts_with(request),
-                    "Filesytem: Found conflicting lock region, despite already checked for conflicts");
-                continue;
-            }
 
-            // Pretend region would be split into parts 1 and 2.
-            const start1 = region.start;
-            const start2 = request.start + request.length;
-            const length1 = request.start - start1;
-            const length2 = region.start + region.length - start2;
+                if i >= inode_mut.locks.len() {
+                    break;
+                }
+                let region = &inode_mut.locks[i];
 
-            if(length1 > 0 && length2 > 0 && region.r#type === request.r#type)
-            {
-                // Requested region is already locked with the required type.
-                // Return early - no need to modify anything.
-                return P9_LOCK_SUCCESS;
-            }
+                debug_assert!(region.length.is_some(),
+                    "Filesystem: Lock region length should be non None");
+                debug_assert!(region.r#type == P9_LOCK_TYPE_RDLCK || region.r#type == P9_LOCK_TYPE_WRLCK,
+                    "Filesystem: Found invalid lock type: {}", region.r#type);
+                debug_assert!(!i-1 >= inode_mut.locks.len() || inode_mut.locks[i-1].start <= region.start,
+                    "Filesystem: Locks should be sorted by starting offset");
 
-            if(length1 > 0)
-            {
-                // Shrink from right / first half of the split.
-                region.length = length1;
-            }
+                // Skip to requested region.
+                if region.start + region.length.unwrap() <= request_copy.start {
+                    i += 1;
+                    continue;
+                } 
 
-            if(length1 <= 0 && length2 > 0)
-            {
-                // Shrink from left.
-                region.start = start2;
-                region.length = length2;
-            }
-            else if(length2 > 0)
-            {
-                // Add second half of the split.
+                // Check whether we've skipped past the requested region.
+                if request_copy.start + request_copy.length.unwrap() <= region.start {
+                    break;
+                }
 
-                // Fast-forward to correct location.
-                while(i < inode.locks.length && inode.locks[i].start < start2) i++;
+                // Skip over locks of different owners.
+                if region.proc_id != request_copy.proc_id || region.client_id != request_copy.client_id
+                {
+                    debug_assert!(!region.conflicts_with(request_copy),
+                        "Filesytem: Found conflicting lock region, despite already checked for conflicts");
+                    i += 1;
+                    continue;
+                }
 
-                inode.locks.splice(i, 0,
-                    self.DescribeLock(region.r#type, start2, length2, region.proc_id, region.client_id));
-            }
-            else if(length1 <= 0)
-            {
-                // Requested region completely covers this region. Delete.
-                inode.locks.splice(i, 1);
-                i--;
+                // Pretend region would be split into parts 1 and 2.
+                let start1 = region.start;
+                let start2 = request_copy.start + request_copy.length.unwrap();
+                let length1 = request_copy.start - start1;
+                let length2 = region.start + region.length.unwrap() - start2;
+
+                if length1 > 0 && length2 > 0 && region.r#type == request_copy.r#type
+                {
+                    // Requested region is already locked with the required type.
+                    // Return early - no need to modify anything.
+                    return P9_LOCK_SUCCESS;
+                }
+
+                if length1 > 0
+                {
+                    let region_mut = &mut inode_mut.locks[i];
+                    // Shrink from right / first half of the split.
+                    region_mut.length = Some(length1);
+                }
+
+                if length1 <= 0 && length2 > 0
+                {
+                    let region_mut = &mut inode_mut.locks[i];
+                    // Shrink from left.
+                    region_mut.start = start2;
+                    region_mut.length = Some(length2);
+                }
+                else if length2 > 0
+                {
+                    // Add second half of the split.
+
+                    // Fast-forward to correct location.
+                    while i < inode_mut.locks.len() && inode_mut.locks[i].start < start2 {
+                        i += 1;
+                    }
+
+                    let updated_region = &inode_mut.locks[i];
+
+                    inode_mut.locks.insert(i,
+                        FS::describe_lock(updated_region.r#type, start2, length2, updated_region.proc_id, &updated_region.client_id));
+                }
+                else if length1 <= 0
+                {
+                    // Requested region completely covers this region. Delete.
+                    inode_mut.locks.remove(i);
+                    i -= 1;
+                }
+                i += 1;
             }
         }
-
         // (3) Insert requested lock region as a whole.
         // No point in adding the requested lock region as fragmented bits in the above loop
         // and having to merge them all back into one.
-        if(request.r#type !== P9_LOCK_TYPE_UNLCK)
+        if request_copy.r#type != P9_LOCK_TYPE_UNLCK
         {
-            let new_region = request;
-            let has_merged = false;
-            let i = 0;
+            let mut has_merged = false;
+            let mut i = 0;
+            let inode_mut = &mut self.inodes[id];
 
-            // Fast-forward to requested position, and try merging with previous region.
-            for(; i < inode.locks.length; i++)
+            let mut new_region_i : Option<usize> = None;
+
+            // Fast-forward to request_copyed position, and try merging with previous region.
+            loop
             {
-                if(new_region.may_merge_after(inode.locks[i]))
+                let new_region = 
+                    if let Some(ind) = new_region_i {
+                        &inode_mut.locks[ind]
+                    } else {
+                        request_copy
+                    };
+                
+                let i_lock_start = inode_mut.locks[i].start;
+
+                if i >= inode_mut.locks.len() {
+                    break;
+                }
+                if new_region.may_merge_after(&inode_mut.locks[i])
                 {
-                    inode.locks[i].length += request.length;
-                    new_region = inode.locks[i];
+                    let new_length = inode_mut.locks[i].length.unwrap() + request_copy.length.unwrap();
+                    inode_mut.locks[i].length = Some(new_length);
+                    new_region_i = Some(i);
+                    //new_region = &inode_mut.locks[i];
                     has_merged = true;
                 }
-                if(request.start <= inode.locks[i].start) break;
+                if request_copy.start <= i_lock_start {
+                    break;
+                } 
+                i += 1;
             }
-
-            if(!has_merged)
             {
-                inode.locks.splice(i, 0, new_region);
-                i++;
-            }
+                let new_region1 = 
+                    if let Some(ind) = new_region_i {
+                        &inode_mut.locks[ind]
+                    } else {
+                        request_copy
+                    };
 
-            // Try merging with the subsequent alike region.
-            for(; i < inode.locks.length; i++)
-            {
-                if(!inode.locks[i].is_alike(new_region)) continue;
-
-                if(inode.locks[i].may_merge_after(new_region))
+                if !has_merged
                 {
-                    new_region.length += inode.locks[i].length;
-                    inode.locks.splice(i, 1);
+                    inode_mut.locks.insert(i, new_region1.clone());
+                    i += 1;
                 }
+                let new_region = 
+                    if let Some(ind) = new_region_i {
+                        &inode_mut.locks[ind]
+                    } else {
+                        request_copy
+                    };
+                
+                // Try merging with the subsequent alike region.
+                loop 
+                {
+                    if i >= inode_mut.locks.len() {
+                        break;
+                    }
 
-                // No more mergable regions after self.
-                break;
+                    if !inode_mut.locks[i].is_alike(&new_region){
+                        i += 1;
+                        continue;
+                    }
+
+                    if inode_mut.locks[i].may_merge_after(&new_region)
+                    {
+                        let new_region_length_size = new_region.length.unwrap() + inode_mut.locks[i].length.unwrap();
+                        inode_mut.locks.remove(i);
+                        let new_region_mut = 
+                            if let Some(ind) = new_region_i {
+                                &mut inode_mut.locks[ind]
+                            } else {
+                                request_copy_mut
+                            };
+    
+                        new_region_mut.length = Some(new_region_length_size);
+                    }
+
+                    // No more mergable regions after self.
+                    break;
+                }
             }
         }
 
         return P9_LOCK_SUCCESS;
     }
+    pub fn read_dir(&mut self, path : &String) -> Option<Vec<String>> {
+        let p = self.search_path(path);
 
-    public read_dir(path : string) : Nullable<Array<string>> {
-        const p = self.SearchPath(path);
-
-        if(p.id === -1)
+        if p.id.is_none()
         {
-            return undefined;
+            return None;
         }
 
-        const dir = self.GetInode(p.id);
+        let dir = self.get_inode(p.id.unwrap());
 
-        return Array.from(dir.direntries.keys()).filter(path => path !== "." && path !== "..");
+        let mut result : Vec<String> = Vec::new();
+
+        for key in dir.direntries.keys() {
+            if key != "." && key != ".." {
+                result.push(key.clone());
+            }
+        }
+        return Some(result);
     }
-    */
 
     pub fn read_file(&mut self, file : &String) -> Option<&[u8]> {
         let p = self.search_path(file);
