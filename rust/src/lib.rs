@@ -2184,7 +2184,6 @@ impl FS {
 
         return (Some(idx), SUCCESS);
     }
-    /*
     /**
      * @param {number} type
      * @param {number} start
@@ -2193,48 +2192,45 @@ impl FS {
      * @param {string} client_id
      * @return {!FSLockRegion}
      */
-    public DescribeLock(type : number, start : number, length : number, proc_id : number, client_id: string) : FSLockRegion {
-        debug_assert!(type === P9_LOCK_TYPE_RDLCK ||
-            type === P9_LOCK_TYPE_WRLCK ||
-            type === P9_LOCK_TYPE_UNLCK,
-            "Filesystem: Invalid lock type: " + type);
-        debug_assert!(start >= 0, "Filesystem: Invalid negative lock starting offset: " + start);
-        debug_assert!(length > 0, "Filesystem: Invalid non-positive lock length: " + length);
+    pub fn describe_lock(r#type : i32, start : usize, length : usize, proc_id : i32, client_id: &String) -> FSLockRegion {
+        debug_assert!(r#type == P9_LOCK_TYPE_RDLCK ||
+            r#type == P9_LOCK_TYPE_WRLCK ||
+            r#type == P9_LOCK_TYPE_UNLCK,
+            "Filesystem: Invalid lock type: {}", r#type);
 
-        const lock = new FSLockRegion();
-        lock.r#type = type;
-        lock.start = start;
-        lock.length = length;
-        lock.proc_id = proc_id;
-        lock.client_id = client_id;
-
-        return lock;
+        return FSLockRegion {
+            r#type: r#type,
+            start: start,
+            length: Some(length),
+            proc_id: proc_id,
+            client_id: client_id.clone()
+        };
     }
-
     /**
      * @param {number} id
      * @param {FSLockRegion} request
      * @return {FSLockRegion} The first conflicting lock found, or null if requested lock is possible.
      */
-    public GetLock(id : number, request : FSLockRegion) : FSLockRegion | null {
-        const inode = self.inodes[id];
+    pub fn get_lock(&self, id : usize, request : FSLockRegion) -> Option<FSLockRegion> {
+        let inode = &self.inodes[id];
 
-        if(this.is_forwarder(inode))
+        if FS::is_forwarder(inode)
         {
-            const foreign_id = inode.foreign_id;
-            return self.follow_fs(inode).GetLock(foreign_id, request);
+            return self.follow_fs_immutable(inode)
+                .get_lock(inode.foreign_id.unwrap(), request);
         }
 
-        for(const region of inode.locks)
+        for region in &inode.locks
         {
-            if(request.conflicts_with(region))
+            if request.conflicts_with(&region)
             {
-                return region.clone();
+                return Some(region.clone());
             }
         }
-        return null;
+        return None;
     }
 
+    /*
     /**
      * @param {number} id
      * @param {FSLockRegion} request
@@ -2621,8 +2617,8 @@ impl FSMountInfo {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct FSLockRegion {
     r#type : i32,
-    start : i32,
-    length : Option<i32>,
+    start : usize,
+    length : Option<usize>,
     proc_id : i32,
     client_id : String
 }
@@ -2637,6 +2633,37 @@ impl FSLockRegion {
             proc_id : -1,
             client_id : "".to_owned()
         }
+    }
+    
+    pub fn clone(&self) -> FSLockRegion {
+        return FSLockRegion {
+            r#type : self.r#type,
+            start : self.start,
+            length : self.length.clone(),
+            proc_id : self.proc_id,
+            client_id : self.client_id.clone()
+        };
+    }
+
+    pub fn conflicts_with(&self, region: &FSLockRegion) -> bool {
+        if self.proc_id == region.proc_id && self.client_id == region.client_id { return false; }
+        if self.r#type == P9_LOCK_TYPE_UNLCK || region.r#type == P9_LOCK_TYPE_UNLCK { return false; }
+        if self.r#type != P9_LOCK_TYPE_WRLCK && region.r#type != P9_LOCK_TYPE_WRLCK { return false; }
+        // ADDED is_some test here
+        if self.length.is_some() && self.start + self.length.unwrap() <= region.start { return false; }
+        if region.length.is_some() && region.start + region.length.unwrap() <= self.start { return false; }
+        return true;    
+    }
+
+    pub fn is_alike(&self, region : &FSLockRegion) -> bool {
+        return region.proc_id == self.proc_id &&
+            region.client_id == self.client_id &&
+            region.r#type == self.r#type;
+    }
+
+    pub fn may_merge_after(&self, region : &FSLockRegion) -> bool {
+        // Added: is_some
+        return self.is_alike(region) && region.length.is_some() && region.start + region.length.unwrap() == self.start;
     }
 }
 /*
@@ -2661,29 +2688,5 @@ impl FSLockRegion {
         self.client_id = state[4] as string;
     }
 
-    public clone() : FSLockRegion {
-        const new_region = new FSLockRegion();
-        new_region.set_state(this.get_state());
-        return new_region;
-    }
-
-    public conflicts_with(region: FSLockRegion) : boolean {
-        if(this.proc_id === region.proc_id && self.client_id === region.client_id) return false;
-        if(this.r#type === P9_LOCK_TYPE_UNLCK || region.r#type === P9_LOCK_TYPE_UNLCK) return false;
-        if(this.r#type !== P9_LOCK_TYPE_WRLCK && region.r#type !== P9_LOCK_TYPE_WRLCK) return false;
-        if(this.start + self.length <= region.start) return false;
-        if(region.start + region.length <= self.start) return false;
-        return true;    
-    }
-
-    public is_alike(region : FSLockRegion) : boolean {
-        return region.proc_id === self.proc_id &&
-            region.client_id === self.client_id &&
-            region.r#type === self.r#type;
-    }
-
-    public may_merge_after(region : FSLockRegion) : boolean {
-        return self.is_alike(region) && region.start + region.length === self.start;
-    }
 }
 */
