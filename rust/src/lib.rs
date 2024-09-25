@@ -11,8 +11,8 @@
 #[no_mangle]
 pub extern "C" fn main() {
     let mut fs = FS::new(None);
-    let path = &"bees.bepis".to_owned();
-    let beesptr = fs.create_text_file(path, fs.root_id, &"applebeeeeeees".to_owned());
+    let path = "bees.bepis";
+    let beesptr = fs.create_text_file(path, fs.root_id, "applebeeeeeees");
     println!("got file {}", beesptr);
     if let Some(result_text) = fs.read_text_file(path) {
         println!("got text {}", result_text);
@@ -21,10 +21,10 @@ pub extern "C" fn main() {
         println!("got no text");
     }
 
-    let directory = fs.create_directory(&"applebees wow".to_owned(), Some(fs.root_id));
-    let beesptr2 = fs.create_text_file(path, directory, &"applebeeeeeees2".to_owned());
+    let directory = fs.create_directory("applebees wow", Some(fs.root_id));
+    let beesptr2 = fs.create_text_file(path, directory, "applebeeeeeees2");
     println!("got file 2 {} with full path {}", beesptr2, fs.get_full_path(directory));
-    if let Some(result_text) = fs.read_text_file(&"/applebees wow/bees.bepis".to_owned()) {
+    if let Some(result_text) = fs.read_text_file("/applebees wow/bees.bepis") {
         println!("got text 2 {}", result_text);
     }
     else {
@@ -47,7 +47,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::str::from_utf8;
 use std::cmp::min;
 
-pub fn print_debug(msg: String) {
+pub fn print_debug(msg: &str) {
     println!("{}", msg);
 }
 
@@ -107,7 +107,7 @@ fn unmarshall_u64(data: &[u8], offset: u64) -> (u64, u64) {
     return (result.unwrap(), cursor.position());
 }
 
-fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
+fn marshall_string(val: &str, data: &mut [u8], offset: u64) -> u64 {
     // write string length
     let as_bytes: &[u8] = val.as_bytes();
     let new_offset = marshall_u16(as_bytes.len() as u16, data, offset);
@@ -117,7 +117,7 @@ fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
     return cursor.position();
 }
 
-fn string_to_array(val: &String) -> UInt8Array {
+fn string_to_array(val: &str) -> UInt8Array {
     // write string length
     let as_bytes: &[u8] = val.as_bytes();
     let mut array = UInt8Array::new(as_bytes.len());
@@ -400,7 +400,7 @@ impl FS {
             //);
         };
 
-        result.root_id = result.create_directory(&"".to_owned(), None);
+        result.root_id = result.create_directory("", None);
 
         result
     }
@@ -586,7 +586,7 @@ impl FS {
      * @param {number} idx
      * @param {string} name
      */
-    pub fn link_under_dir(&mut self, parentid : usize, idx : usize, name : &String) {
+    pub fn link_under_dir(&mut self, parentid : usize, idx : usize, name : &str) {
         // Checks
         {
             debug_assert!(!FS::is_forwarder(&self.inodes[parentid]),
@@ -604,7 +604,7 @@ impl FS {
 
         {
             let parent_inode = &mut self.inodes[parentid];
-            parent_inode.direntries.insert(name.clone(), idx);
+            parent_inode.direntries.insert(name.to_owned().clone(), idx);
             if is_directory {
                 parent_inode.nlinks += 1;
             }
@@ -634,7 +634,7 @@ impl FS {
      * @param {number} parentid
      * @param {string} name
      */
-    pub fn unlink_from_dir(&mut self, parentid : usize, name : &String) {
+    pub fn unlink_from_dir(&mut self, parentid : usize, name : &str) {
         
         debug_assert!(!FS::is_forwarder(&self.inodes[parentid]), "Filesystem: Can't unlink from forwarders");
         debug_assert!(self.is_directory(parentid), "Filesystem: Can't unlink from non-directories");
@@ -682,7 +682,7 @@ impl FS {
             "Filesystem: Found negative nlinks value of {}", inode.nlinks);
     }
     
-    pub fn push_inode(&mut self, mut inode : INode, parentid : Option<usize>, name : &String) {
+    pub fn push_inode(&mut self, mut inode : INode, parentid : Option<usize>, name : &str) {
         if parentid.is_some() {
             inode.fid = self.inodes.len();
             let inode_fid = inode.fid;
@@ -710,7 +710,7 @@ impl FS {
          * @param {string} filename Name of target to divert.
          * @return {number} New idx of diversion.
          */
-    pub fn divert(&mut self, parentid : usize, filename : &String) -> usize {
+    pub fn divert(&mut self, parentid : usize, filename : &str) -> usize {
         let old_idx = self.search(parentid, filename);
         debug_assert!(old_idx.is_some(), "Filesystem divert: name ({}) not found", filename);
         let old_inode = &self.inodes[old_idx.unwrap()];
@@ -841,7 +841,7 @@ impl FS {
     }
 
     // Note: parentid = -1 for initial root directory.
-    pub fn create_directory(&mut self, name: &String, parentid: Option<usize>) -> usize {
+    pub fn create_directory(&mut self, name: &str, parentid: Option<usize>) -> usize {
         
         if parentid.is_some() {
             let parent_node = &self.inodes[parentid.unwrap()];
@@ -864,13 +864,13 @@ impl FS {
         }
         x.qid.r#type = (S_IFDIR >> 8) as u8;
         self.push_inode(x, parentid, name);
-        self.notify_listeners(self.inodes.len()-1, &"newdir".to_owned());
+        self.notify_listeners(self.inodes.len()-1, "newdir");
         return self.inodes.len()-1;
     }
     
 
 
-    pub fn create_file(&mut self, filename : &String, parentid : usize) -> usize {
+    pub fn create_file(&mut self, filename : &str, parentid : usize) -> usize {
         let parent_inode = &self.inodes[parentid];
         if FS::is_forwarder(parent_inode)
         {
@@ -886,11 +886,11 @@ impl FS {
         x.qid.r#type = (S_IFREG >> 8) as u8;
         x.mode = (self.inodes[parentid].mode & 0x1B6) | S_IFREG;
         self.push_inode(x, Some(parentid), filename);
-        self.notify_listeners(self.inodes.len()-1, &"newfile".to_owned());
+        self.notify_listeners(self.inodes.len()-1, "newfile");
         return self.inodes.len()-1;
     }
 
-    pub fn create_node(&mut self, filename: &String, parentid: usize, major: i32, minor: i32) -> usize {
+    pub fn create_node(&mut self, filename: &str, parentid: usize, major: i32, minor: i32) -> usize {
         let parent_inode = &self.inodes[parentid];
         if FS::is_forwarder(parent_inode)
         {
@@ -913,7 +913,7 @@ impl FS {
         return self.inodes.len()-1;
     }
 
-    pub fn create_symlink(&mut self, filename : &String, parentid: usize, symlink : &String) -> usize {
+    pub fn create_symlink(&mut self, filename : &str, parentid: usize, symlink : &str) -> usize {
         let parent_inode = &self.inodes[parentid];
         if FS::is_forwarder(parent_inode)
         {
@@ -928,13 +928,13 @@ impl FS {
         x.uid = self.inodes[parentid].uid;
         x.gid = self.inodes[parentid].gid;
         x.qid.r#type = (S_IFLNK >> 8) as u8;
-        x.symlink = symlink.clone();
+        x.symlink = symlink.to_owned().clone();
         x.mode = S_IFLNK;
         self.push_inode(x, Some(parentid), filename);
         return self.inodes.len()-1;
     }
 
-    pub fn create_text_file(&mut self, filename : &String, parentid : usize, data : &String) -> usize {
+    pub fn create_text_file(&mut self, filename : &str, parentid : usize, data : &str) -> usize {
         let parent_inode = &self.inodes[parentid];
         if FS::is_forwarder(parent_inode)
         {
@@ -956,7 +956,7 @@ impl FS {
     /**
      * @param {UInt8Array} buffer
      */
-    pub fn create_binary_file(&mut self, filename : &String, parentid : usize, buffer : &[u8]) -> usize {
+    pub fn create_binary_file(&mut self, filename : &str, parentid : usize, buffer : &[u8]) -> usize {
         let parent_inode = &self.inodes[parentid];
         if FS::is_forwarder(parent_inode)
         {
@@ -1024,7 +1024,7 @@ impl FS {
     /**
      * @return {!Promise<number>} 0 if success, or errno if failured.
      */
-    pub fn rename(&mut self, olddirid: usize, oldname: &String, newdirid: usize, newname: &String) -> i32 {
+    pub fn rename(&mut self, olddirid: usize, oldname: &str, newdirid: usize, newname: &str) -> i32 {
         // message.Debug("Rename " + oldname + " to " + newname);
         if (olddirid == newdirid) && (oldname == newname) {
             return SUCCESS;
@@ -1086,13 +1086,13 @@ impl FS {
         {
             // The actual inode is a root of some descendant filesystem.
             // Moving mountpoint across fs not supported - needs to update all corresponding forwarders.
-            print_debug(format!("XXX: Attempted to move mountpoint ({}) - skipped", oldname));
+            print_debug(format!("XXX: Attempted to move mountpoint ({}) - skipped", oldname).as_str());
             return EPERM;
         }
         else if !self.is_directory(idx) && self.get_inode(idx).nlinks > 1
         {
             // Move hardlinked inode vertically in mount tree.
-            print_debug(format!("XXX: Attempted to move hardlinked file ({}) across filesystems - skipped", oldname));
+            print_debug(format!("XXX: Attempted to move hardlinked file ({}) across filesystems - skipped", oldname).as_str());
             return EPERM;
         }
         else
@@ -1189,7 +1189,7 @@ impl FS {
         }
 
         self.notify_listeners_with_info(idx,
-            &"rename".to_owned(),
+            "rename",
             NotifyInfo {
                 oldpath: oldpath
             }
@@ -1203,7 +1203,7 @@ impl FS {
     }
 
     pub fn write_arr(&mut self, id : usize, offset : usize, count : usize, buffer : Option<&[u8]>) {
-        self.notify_listeners(id, &"write".to_owned());
+        self.notify_listeners(id, "write");
         let inode = &self.inodes[id];
 
         if FS::is_forwarder(inode)
@@ -1258,7 +1258,7 @@ impl FS {
         return self.get_data(inodeid, offset, count);
     }
     
-    pub fn search(&mut self, parentid : usize, name : &String) -> Option<usize> {
+    pub fn search(&mut self, parentid : usize, name : &str) -> Option<usize> {
         let parent_inode = &self.inodes[parentid];
 
         if FS::is_forwarder(parent_inode)
@@ -1378,7 +1378,7 @@ impl FS {
             }
         }
         path.reverse();
-        return path[1..].join("").to_owned();
+        return path[1..].join("");
     }
     
     /**
@@ -1387,7 +1387,7 @@ impl FS {
      * @param {string} name
      * @return {number} 0 if success, or errno if failured.
      */
-    pub fn link(&mut self, parentid : usize, targetid : usize, name : &String) -> i32 {
+    pub fn link(&mut self, parentid : usize, targetid : usize, name : &str) -> i32 {
         if self.is_directory(targetid)
         {
             return EPERM;
@@ -1400,7 +1400,7 @@ impl FS {
         {
             if !FS::is_forwarder(inode) || inode.mount_id.unwrap() != parent_inode.mount_id.unwrap()
             {
-                print_debug("XXX: Attempted to hardlink a file into a child filesystem - skipped".to_owned());
+                print_debug("XXX: Attempted to hardlink a file into a child filesystem - skipped");
                 return EPERM;
             }
             let parent_inode_mount_id = parent_inode.mount_id.unwrap();
@@ -1412,7 +1412,7 @@ impl FS {
 
         if FS::is_forwarder(inode)
         {
-            print_debug("XXX: Attempted to hardlink file across filesystems - skipped".to_owned());
+            print_debug("XXX: Attempted to hardlink file across filesystems - skipped");
             return EPERM;
         }
 
@@ -1420,7 +1420,7 @@ impl FS {
         return SUCCESS;
     }
 
-    pub fn unlink(&mut self, parentid : usize, name : &String) -> i32 {
+    pub fn unlink(&mut self, parentid : usize, name : &str) -> i32 {
         if name == "." || name == ".."
         {
             // Also guarantees that root cannot be deleted.
@@ -1463,7 +1463,7 @@ impl FS {
         {
             // don't delete the content. The file is still accessible
             inode_mut.status = STATUS_UNLINKED;
-            self.notify_listeners(idx, &"delete".to_owned());
+            self.notify_listeners(idx, "delete");
         }
         return SUCCESS;
     }
@@ -1588,7 +1588,7 @@ impl FS {
         
     }
 
-    pub fn search_path(&mut self, path : &String) -> SearchResult {
+    pub fn search_path(&mut self, path : &str) -> SearchResult {
         //path = path.replace(/\/\//g, "/");
         let path_fixed = path.replace("//", "/");
         let mut walk: Vec<&str> = path_fixed.split('/').collect();
@@ -1607,7 +1607,7 @@ impl FS {
         for i in 0..n {
             parentid = id;
             if parentid.is_some() {
-                id = self.search(parentid.unwrap(), &walk[i].to_owned());
+                id = self.search(parentid.unwrap(), walk[i]);
                 
                 if forward_path.is_none()
                     && FS::is_forwarder(&self.inodes[parentid.unwrap()])
@@ -1691,7 +1691,7 @@ impl FS {
     }
     
 
-    pub fn recursive_delete(&mut self, path : &String) {
+    pub fn recursive_delete(&mut self, path : &str) {
         let mut to_delete : Vec<RecursiveListResult> = Vec::new();
         let ids = self.search_path(path);
         if ids.id.is_none() {
@@ -1707,7 +1707,7 @@ impl FS {
         }
     }
 
-    pub fn delete_node(&mut self, path : &String) {
+    pub fn delete_node(&mut self, path : &str) {
         let ids = self.search_path(path);
         if ids.id.is_none() {
             return;
@@ -1724,12 +1724,12 @@ impl FS {
         }
     }
     
-    pub fn notify_listeners(&self, id: usize, action: &String) {
+    pub fn notify_listeners(&self, id: usize, action: &str) {
 
     }
 
     /** @param {*=} info */
-    pub fn notify_listeners_with_info(&self, id: usize, action: &String, info: NotifyInfo) {
+    pub fn notify_listeners_with_info(&self, id: usize, action: &str, info: NotifyInfo) {
         //if(info==undefined)
         //    info = {};
 
@@ -1756,25 +1756,25 @@ impl FS {
 
             let inode = self.get_inode(i);
             if inode.nlinks < 0 {
-                print_debug(format!("Error in filesystem: negative nlinks={} at id ={}", inode.nlinks, i).to_owned());
+                print_debug(format!("Error in filesystem: negative nlinks={} at id ={}", inode.nlinks, i).as_str());
             }
 
             if self.is_directory(i)
             {
                 if self.is_directory(i) && self.get_parent(i).is_none() {
-                    print_debug(format!("Error in filesystem: negative parent id {}", i).to_owned());
+                    print_debug(format!("Error in filesystem: negative parent id {}", i).as_str());
                 }
                 
                 let inode_const = self.get_inode(i);
                 for (name, id) in inode_const.direntries.iter()
                 {
                     if name.len() == 0 {
-                        print_debug(format!("Error in filesystem: inode with no name and id {}", id).to_owned());
+                        print_debug(format!("Error in filesystem: inode with no name and id {}", id).as_str());
                     }
 
                     for c in name.chars() {
                         if (c as u32) < 32 {
-                            print_debug("Error in filesystem: Unallowed char in filename".to_owned());
+                            print_debug("Error in filesystem: Unallowed char in filename");
                         }
                     }
                 }
@@ -1911,7 +1911,7 @@ impl FS {
 
         if FS::should_be_linked(inode)
         {
-            return inode.direntries.get(&"..".to_owned()).map(|&x| x);
+            return inode.direntries.get("..").map(|&x| x);
         }
         else
         {
@@ -2133,7 +2133,7 @@ impl FS {
      * @param {FS} fs
      * @return {number} inode id of mount point if successful, or -errno if mounting failed.
      */
-    pub fn mount(&mut self, path : &String, fs : FS) -> (Option<usize>, i32)  {
+    pub fn mount(&mut self, path : &str, fs : FS) -> (Option<usize>, i32)  {
         debug_assert!(fs.qidcounter.last_qidnumber == self.qidcounter.last_qidnumber,
             "Cannot mount filesystem whose qid numbers aren't synchronised with current filesystem.");
 
@@ -2141,12 +2141,12 @@ impl FS {
 
         if path_infos.parentid.is_none()
         {
-            print_debug(format!("Mount failed: parent for path not found: {}", path));
+            print_debug(format!("Mount failed: parent for path not found: {}", path).as_str());
             return (None, ENOENT);
         }
         if path_infos.id.is_none()
         {
-            print_debug(format!("Mount failed: file already exists at path: {}", path));
+            print_debug(format!("Mount failed: file already exists at path: {}", path).as_str());
             return (None, EEXIST);
         }
         if path_infos.forward_path.is_some()
@@ -2181,7 +2181,7 @@ impl FS {
      * @param {string} client_id
      * @return {!FSLockRegion}
      */
-    pub fn describe_lock(r#type : i32, start : usize, length : usize, proc_id : i32, client_id: &String) -> FSLockRegion {
+    pub fn describe_lock(r#type : i32, start : usize, length : usize, proc_id : i32, client_id: &str) -> FSLockRegion {
         debug_assert!(r#type == P9_LOCK_TYPE_RDLCK ||
             r#type == P9_LOCK_TYPE_WRLCK ||
             r#type == P9_LOCK_TYPE_UNLCK,
@@ -2192,7 +2192,7 @@ impl FS {
             start: start,
             length: Some(length),
             proc_id: proc_id,
-            client_id: client_id.clone()
+            client_id: client_id.to_owned().clone()
         };
     }
     /**
@@ -2426,7 +2426,7 @@ impl FS {
 
         return P9_LOCK_SUCCESS;
     }
-    pub fn read_dir(&mut self, path : &String) -> Option<Vec<String>> {
+    pub fn read_dir(&mut self, path : &str) -> Option<Vec<String>> {
         let p = self.search_path(path);
 
         if p.id.is_none()
@@ -2446,7 +2446,7 @@ impl FS {
         return Some(result);
     }
 
-    pub fn read_text_file(&mut self, file : &String) -> Option<String> {
+    pub fn read_text_file(&mut self, file : &str) -> Option<String> {
         return if let Some(data) = self.read_file(file) {
             from_utf8(data).ok().map(String::from)
         }
@@ -2455,7 +2455,7 @@ impl FS {
         }
     }
 
-    pub fn read_file(&mut self, file : &String) -> Option<&[u8]> {
+    pub fn read_file(&mut self, file : &str) -> Option<&[u8]> {
         let p = self.search_path(file);
         if p.id.is_none()
         {
