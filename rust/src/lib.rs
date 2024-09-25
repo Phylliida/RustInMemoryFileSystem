@@ -1,12 +1,27 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-// TODO: STATUS_ON_STORAGE STUFF
+// TODO: STATUS_ON_STORAGE STUFF (local filestorage? idk how)
 // TODO: clone_me rename to clone once I'm done with porting (For Uint8Array)
 // TODO: Is it ok to clone FSLockRegion vec?
 
+// https://github.com/wasm-forge/ their file system seems good, doesn't support symlinks but otherwise
+// it came out at the same time as this :/
 
-pub fn 
+#[no_mangle]
+pub extern "C" fn main() {
+    let mut fs = FS::new(None);
+    let path = &"bees.bepis".to_owned();
+    let beesptr = fs.create_text_file(path, fs.root_id, &"applebeeeeeees".to_owned());
+    println!("got file {}", beesptr);
+    if let Some(result_text) = fs.read_text_file(path) {
+        println!("got text {}", result_text);
+    }
+    else {
+        println!("got no text");
+    }
+} 
+
 
 use serde::{Serialize, Deserialize};
 
@@ -14,8 +29,6 @@ type Number = i64;
 
 use std::collections::HashMap;
 use std::vec::Vec;
-use async_trait::async_trait;
-use std::sync::Arc;
 use std::io::{Cursor, Read};  // Add Read here
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use std::io::Write;
@@ -304,31 +317,6 @@ impl UInt8Array {
 }
 
 
-#[async_trait]
-trait FileStorageInterface {
-    /**
-    * Read a portion of a file.
-    * @param {string} sha256sum
-    * @param {number} offset
-    * @param {number} count
-    * @return {!Promise<UInt8Array>} null if file does not exist.
-    */
-    async fn read(&mut self, sha256sum: String, offset: i32, count: i32) -> UInt8Array;
-    /**
-    * Add a read-only file to the filestorage.
-    * @param {string} sha256sum
-    * @param {!UInt8Array} data
-    * @return {!Promise}
-    */
-    async fn cache(&mut self, sha256sum: String, data: UInt8Array) -> ();
-
-    /**
-    * Call this when the file won't be used soon, e.g. when a file closes or when this immutable
-    * version is already out of date. It is used to help prevent accumulation of unused files in
-    * memory in the long run for some FileStorage mediums.
-    */
-    async fn uncache(&mut self, sha256sum : String) -> ();
-}
 
 struct NotifyInfo {
     oldpath: String
@@ -349,29 +337,12 @@ struct RecursiveListResult {
 
 
 
-/**
- * @constructor
- * @param {!FileStorageInterface} storage
- * @param {{ last_qidnumber: number }=} qidcounter Another fs's qidcounter to synchronise with.
- */
- 
-
-// stub so serialization works
-use std::fmt;
-impl fmt::Debug for dyn FileStorageInterface {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("")
-    }
-}
-
-
 #[derive(Serialize, Deserialize, Debug)]
 struct FS{
     inodes : Vec<INode>,
+    root_id : usize,
     #[serde(skip)]
     events : Vec<Event>,
-    #[serde(skip)]
-    storage : Option<Arc<dyn FileStorageInterface>>,
     qidcounter : QIDCounter,
     inodedata : HashMap<usize, UInt8Array>,
     total_size : u64,
@@ -380,12 +351,11 @@ struct FS{
 }
 
 impl FS {
-    pub fn new(storage: Arc<dyn FileStorageInterface>, qidcounter : Option<QIDCounter>) -> FS {
+    pub fn new(qidcounter : Option<QIDCounter>) -> FS {
         let mut result = FS {
             inodes : Vec::new(),
             events : Vec::new(),
-
-            storage : Some(storage),
+            root_id: 0,
 
             qidcounter : match qidcounter {
                 // The division was valid
@@ -419,7 +389,7 @@ impl FS {
             //);
         };
 
-        result.create_directory(&"".to_owned(), None);
+        result.root_id = result.create_directory(&"".to_owned(), None);
 
         result
     }
@@ -887,6 +857,7 @@ impl FS {
         return self.inodes.len()-1;
     }
     
+
 
     pub fn create_file(&mut self, filename : &String, parentid : usize) -> usize {
         let parent_inode = &self.inodes[parentid];
@@ -1610,6 +1581,7 @@ impl FS {
         //path = path.replace(/\/\//g, "/");
         let path_fixed = path.replace("//", "/");
         let mut walk: Vec<&str> = path_fixed.split('/').collect();
+        
         if walk.len() > 0 && walk[walk.len() - 1].len() == 0 {
             let _  = walk.pop();
         }
@@ -1617,7 +1589,7 @@ impl FS {
             let _ = walk.remove(0);
         }
         let n = walk.len();
-
+        
         let mut parentid : Option<usize> = None;
         let mut id : Option<usize> = Some(0);
         let mut forward_path : Option<String> = None;
@@ -1625,7 +1597,8 @@ impl FS {
             parentid = id;
             if parentid.is_some() {
                 id = self.search(parentid.unwrap(), &walk[i].to_owned());
-                if forward_path.is_none() 
+                
+                if forward_path.is_none()
                     && FS::is_forwarder(&self.inodes[parentid.unwrap()])
                 {
                     forward_path = Some("/".to_owned() + &walk[i..].join("/"));
@@ -1636,6 +1609,7 @@ impl FS {
             }
             if id.is_none() {
                 if i < n-1 {
+                    
                     return SearchResult {
                         id: None,
                         parentid: None,
@@ -1643,6 +1617,7 @@ impl FS {
                         forward_path: forward_path
                     };
                 }
+                
                 return SearchResult {
                     id: None,
                     parentid: parentid,
@@ -1651,6 +1626,7 @@ impl FS {
                 };
             }
         }
+        
         return SearchResult {
             id: id,
             parentid: parentid,
@@ -2459,9 +2435,17 @@ impl FS {
         return Some(result);
     }
 
+    pub fn read_text_file(&mut self, file : &String) -> Option<String> {
+        return if let Some(data) = self.read_file(file) {
+            from_utf8(data).ok().map(String::from)
+        }
+        else {
+            None
+        }
+    }
+
     pub fn read_file(&mut self, file : &String) -> Option<&[u8]> {
         let p = self.search_path(file);
-
         if p.id.is_none()
         {
             return None;
