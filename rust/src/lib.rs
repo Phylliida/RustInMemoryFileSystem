@@ -91,6 +91,14 @@ fn marshall_string(val: &String, data: &mut [u8], offset: u64) -> u64 {
     return cursor.position();
 }
 
+fn string_to_array(val: &String) -> UInt8Array {
+    // write string length
+    let as_bytes: &[u8] = val.as_bytes();
+    let mut array = UInt8Array::new(as_bytes.len());
+    array.data.copy_from_slice(as_bytes);
+    return array;
+} 
+
 fn unmarshall_string(data: &[u8], offset: u64) -> (String, u64) {
     let (str_len, new_offset) = unmarshall_u16(data, offset);
     let mut cursor = Cursor::new(data);
@@ -121,6 +129,12 @@ fn unmarshall_qid(data: &[u8], offset: u64) -> (QID, u64) {
         path: path
     };
     return (res, offset_tmp4);
+}
+
+fn bytes_to_array(data: &[u8]) -> UInt8Array {
+    let mut result = UInt8Array::new(data.len());
+    result.data.copy_from_slice(data);
+    return result;
 }
 
 
@@ -892,96 +906,103 @@ impl FS {
         return self.inodes.len()-1;
     }
 
-    /*
-    public CreateNode(filename: string, parentid: number, major: number, minor: number) : number {
-        const parent_inode = self.inodes[parentid];
-        if(this.is_forwarder(parent_inode))
+    pub fn create_node(&mut self, filename: &String, parentid: usize, major: i32, minor: i32) -> usize {
+        let parent_inode = &self.inodes[parentid];
+        if FS::is_forwarder(parent_inode)
         {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id =
-                self.follow_fs(parent_inode).CreateNode(filename, foreign_parentid, major, minor);
-            return self.create_forwarder(parent_inode.mount_id, foreign_id);
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let parent_inode_foreign_id = parent_inode.foreign_id.unwrap();
+            let foreign_id =
+                self.follow_fs_by_id_mut(parent_inode_mount_id)
+                    .create_node(filename, parent_inode_foreign_id
+                        , major, minor);
+            return self.create_forwarder(parent_inode_mount_id, foreign_id);
         }
-        var x = self.CreateInode();
+        let mut x = self.create_inode();
         x.major = major;
         x.minor = minor;
         x.uid = self.inodes[parentid].uid;
         x.gid = self.inodes[parentid].gid;
-        x.qid.r#type = S_IFSOCK >> 8;
-        x.mode = (this.inodes[parentid].mode & 0x1B6);
-        self.PushInode(x, parentid, filename);
-        return self.inodes.length-1;
+        x.qid.r#type = (S_IFSOCK >> 8) as u8;
+        x.mode = self.inodes[parentid].mode & 0x1B6;
+        self.push_inode(x, Some(parentid), filename);
+        return self.inodes.len()-1;
     }
 
-    public CreateSymlink(filename : string, parentid: number, symlink : string) : number {
-        const parent_inode = self.inodes[parentid];
-        if(this.is_forwarder(parent_inode))
+    pub fn create_symlink(&mut self, filename : &String, parentid: usize, symlink : &String) -> usize {
+        let parent_inode = &self.inodes[parentid];
+        if FS::is_forwarder(parent_inode)
         {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id =
-                self.follow_fs(parent_inode).CreateSymlink(filename, foreign_parentid, symlink);
-            return self.create_forwarder(parent_inode.mount_id, foreign_id);
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let parent_inode_foreign_id = parent_inode.foreign_id.unwrap();
+            let foreign_id =
+                self.follow_fs_by_id_mut(parent_inode_mount_id)
+                    .create_symlink(filename, parent_inode_foreign_id, symlink);
+            return self.create_forwarder(parent_inode_mount_id, foreign_id);
         }
-        var x = self.CreateInode();
+        let mut x = self.create_inode();
         x.uid = self.inodes[parentid].uid;
         x.gid = self.inodes[parentid].gid;
-        x.qid.r#type = S_IFLNK >> 8;
-        x.symlink = symlink;
+        x.qid.r#type = (S_IFLNK >> 8) as u8;
+        x.symlink = symlink.clone();
         x.mode = S_IFLNK;
-        self.PushInode(x, parentid, filename);
-        return self.inodes.length-1;
+        self.push_inode(x, Some(parentid), filename);
+        return self.inodes.len()-1;
     }
 
-    public CreateTextFile(filename : string, parentid : number, str : string) : number {
-        const parent_inode = self.inodes[parentid];
-        if(this.is_forwarder(parent_inode))
+    pub fn create_text_file(&mut self, filename : &String, parentid : usize, data : &String) -> usize {
+        let parent_inode = &self.inodes[parentid];
+        if FS::is_forwarder(parent_inode)
         {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = await
-                self.follow_fs(parent_inode).CreateTextFile(filename, foreign_parentid, str);
-            return self.create_forwarder(parent_inode.mount_id, foreign_id);
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let parent_inode_foreign_id = parent_inode.foreign_id.unwrap();
+            let foreign_id = 
+                self.follow_fs_by_id_mut(parent_inode_mount_id)
+                    .create_text_file(filename, parent_inode_foreign_id, data);
+            return self.create_forwarder(parent_inode_mount_id, foreign_id);
         }
-        var id = self.CreateFile(filename, parentid);
-        var x = self.inodes[id];
-        var data = new UInt8Array(str.length);
-        x.size = str.length;
-        for(var j = 0; j < str.length; j++) {
-            data[j] = str.charCodeAt(j);
-        }
-        await self.set_data(id, data);
+        let id = self.create_file(filename, parentid);
+        let x = &mut self.inodes[id];
+        let str_array = string_to_array(data);
+        x.size = str_array.data.len();
+        self.set_data(id, str_array);
         return id;
     }
 
     /**
      * @param {UInt8Array} buffer
      */
-    public async CreateBinaryFile(filename : string, parentid : number, buffer : UInt8Array) : number {
-        const parent_inode = self.inodes[parentid];
-        if(this.is_forwarder(parent_inode))
+    pub fn create_binary_file(&mut self, filename : &String, parentid : usize, buffer : &[u8]) -> usize {
+        let parent_inode = &self.inodes[parentid];
+        if FS::is_forwarder(parent_inode)
         {
-            const foreign_parentid = parent_inode.foreign_id;
-            const foreign_id = await
-                self.follow_fs(parent_inode).CreateBinaryFile(filename, foreign_parentid, buffer);
-            return self.create_forwarder(parent_inode.mount_id, foreign_id);
+            let parent_inode_mount_id = parent_inode.mount_id.unwrap();
+            let parent_inode_foreign_id = parent_inode.foreign_id.unwrap();
+            let foreign_id =
+                self.follow_fs_by_id_mut(parent_inode_mount_id)
+                    .create_binary_file(filename, parent_inode_foreign_id, buffer);
+            return self.create_forwarder(parent_inode_mount_id, foreign_id);
         }
-        var id = self.CreateFile(filename, parentid);
-        var x = self.inodes[id];
-        var data = new UInt8Array(buffer.length);
-        data.set(buffer);
-        await self.set_data(id, data);
-        x.size = buffer.length;
+        let id = self.create_file(filename, parentid);
+        let x = &mut self.inodes[id];
+        let data = bytes_to_array(buffer);
+        x.size = data.data.len();
+        self.set_data(id, data);
         return id;
     }
 
 
-    public OpenInode(id : number, mode : number) : boolean {
-        var inode = self.inodes[id];
-        if(this.is_forwarder(inode))
+    pub fn open_inode(&mut self, id : usize, mode : usize) -> bool {
+        let inode = &self.inodes[id];
+        if FS::is_forwarder(inode)
         {
-            return self.follow_fs(inode).OpenInode(inode.foreign_id, mode);
+            let inode_mount_id = inode.mount_id.unwrap();
+            let inode_foreign_id = inode.foreign_id.unwrap();
+            return self.follow_fs_by_id_mut(inode_mount_id)
+                .open_inode(inode_foreign_id, mode);
         }
-        if((inode.mode&S_IFMT) === S_IFDIR) {
-            self.FillDirectory(id);
+        if (inode.mode&S_IFMT) == S_IFDIR {
+            self.fill_directory(id);
         }
         /*
         var type = "";
@@ -996,24 +1017,26 @@ impl FS {
         return true;
     }
 
-    public async CloseInode(id : number) : Promise {
+    pub fn close_inode(&mut self, id : usize) {
         //message.Debug("close: " + self.GetFullPath(id));
-        var inode = self.inodes[id];
-        if(this.is_forwarder(inode))
+        let inode = &self.inodes[id];
+        if FS::is_forwarder(inode)
         {
-            return await self.follow_fs(inode).CloseInode(inode.foreign_id);
+            let inode_mount_id = inode.mount_id.unwrap();
+            let inode_foreign_id = inode.foreign_id.unwrap();
+            return self.follow_fs_by_id_mut(inode_mount_id)
+                .close_inode(inode_foreign_id);
         }
-        if(inode.status === STATUS_ON_STORAGE)
-        {
-            self.storage.uncache(inode.sha256sum);
-        }
-        if(inode.status === STATUS_UNLINKED) {
+        //if(inode.status == STATUS_ON_STORAGE)
+        //{
+        //    self.storage.uncache(inode.sha256sum);
+        //}
+        if inode.status == STATUS_UNLINKED {
             //message.Debug("Filesystem: Delete unlinked file");
-            inode.status = STATUS_INVALID;
-            await self.DeleteData(id);
+            self.inodes[id].status = STATUS_INVALID;
+            self.delete_data(id);
         }
     }
-    */
     /**
      * @return {!Promise<number>} 0 if success, or errno if failured.
      */
