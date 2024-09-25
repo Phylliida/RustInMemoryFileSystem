@@ -1,7 +1,9 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-//  TODO: STATUS_ON_STORAGE STUFF
+// TODO: STATUS_ON_STORAGE STUFF
+// TODO: clone_me rename to clone once I'm done with porting (For Uint8Array)
+// TODO: Is it ok to clone FSLockRegion vec?
 
 
 use serde::{Serialize, Deserialize};
@@ -272,6 +274,16 @@ impl UInt8Array {
         UInt8Array {
             data:  vec![0u8; size].into_boxed_slice(),
         }
+    }
+
+    pub fn clone_me(&self) -> UInt8Array {
+        let mut new_data = vec![0u8; self.data.len()];
+        new_data.copy_from_slice(
+            &self.data[0..self.data.len()]
+        );
+        return UInt8Array {
+            data: new_data.into_boxed_slice()
+        };
     }
 }
 
@@ -704,54 +716,74 @@ impl FS {
     pub fn divert(&mut self, parentid : usize, filename : &String) -> usize {
         let old_idx = self.search(parentid, filename);
         debug_assert!(old_idx.is_some(), "Filesystem divert: name ({}) not found", filename);
-        let old_inode = &mut self.inodes[old_idx.unwrap()];
+        let old_inode = &self.inodes[old_idx.unwrap()];
         
         debug_assert!(self.is_directory(old_idx.unwrap()) || old_inode.nlinks <= 1,
             "Filesystem: can't divert hardlinked file '{}' with nlinks={}",
             filename, old_inode.nlinks);
 
         // Shallow copy is alright.
-        let new_inode = INode {
-            ..*old_inode
-        };
+        let new_inode = &mut INode::new(self.qidcounter.last_qidnumber);
 
+        FS::copy_inode(old_inode, new_inode);
+        new_inode.nlinks = old_inode.nlinks;
+        new_inode.direntries = old_inode.direntries.clone();
+
+        // precompute to make borrow checker happy
+        let old_is_forwarder = FS::is_forwarder(old_inode);
+        let old_should_be_linked = FS::should_be_linked(old_inode);
+        let old_mount_id = old_inode.mount_id;
+        let old_foreign_id = old_inode.foreign_id;
         let idx = self.inodes.len();
-        self.inodes.push(new_inode);
+
         new_inode.fid = idx;
 
+        self.inodes.push(std::mem::replace(new_inode, INode::new(0)));
+
+
+
         // Relink references
-        if FS::is_forwarder(old_inode)
+        if old_is_forwarder
         {
-            self.mounts[old_inode.mount_id.unwrap()].backtrack.insert(old_inode.foreign_id.unwrap(), idx);
+            self.mounts[old_mount_id.unwrap()].backtrack.insert(old_foreign_id.unwrap(), idx);
         }
-        if FS::should_be_linked(old_inode)
+        if old_should_be_linked
         {
             self.unlink_from_dir(parentid, filename);
             self.link_under_dir(parentid, idx, filename);
         }
 
+        let new_inode_ref = &self.inodes[idx];
+
         // Update children
-        if self.is_directory(old_idx.unwrap()) && !FS::is_forwarder(old_inode)
+        if self.is_directory(old_idx.unwrap()) && !old_should_be_linked
         {
-            for (name, child_id) in new_inode.direntries.iter()
+            // need to make a running list to appease borrow checker
+            let mut child_ids_to_connect : Vec<usize> = Vec::new();
+
+            for (name, child_id) in new_inode_ref.direntries.iter()
             {
                 if name == "." || name == ".." {
                     continue;
                 }
                 if self.is_directory(*child_id)
                 {
-                    self.inodes[*child_id].direntries.insert("..".to_owned(), idx);
+                    child_ids_to_connect.push(*child_id);
                 }
+            }
+            for child_id in child_ids_to_connect {
+                self.inodes[child_id].direntries.insert("..".to_owned(), idx);
             }
         }
 
         // Relocate local data if any.
-        self.inodedata.insert(idx, self.inodedata[&old_idx.unwrap()]);
-        self.inodedata.remove(&old_idx.unwrap());
-
+        if let Some(old_inode_data) = self.inodedata.remove(&old_idx.unwrap()) {
+            self.inodedata.insert(idx, old_inode_data);
+        }
+        let old_inode_mut = &mut self.inodes[old_idx.unwrap()];
         // Retire old reference information.
-        old_inode.direntries = HashMap::new();
-        old_inode.nlinks = 0;
+        old_inode_mut.direntries = HashMap::new();
+        old_inode_mut.nlinks = 0;
 
         return idx;
     }
@@ -765,7 +797,7 @@ impl FS {
      * @param {!Inode} src_inode
      * @param {!Inode} dest_inode
      */
-    pub fn copy_inode(src_inode : INode, mut dest_inode : INode) {
+    pub fn copy_inode(src_inode : &INode, dest_inode : &mut INode) {
         // dest_inode.direntries = src_inode.direntries
         dest_inode.status = src_inode.status;
         dest_inode.size = src_inode.size;
@@ -777,17 +809,17 @@ impl FS {
         dest_inode.mtime = src_inode.mtime;
         dest_inode.major = src_inode.major;
         dest_inode.minor = src_inode.minor;
-        dest_inode.symlink = src_inode.symlink;
+        dest_inode.symlink = src_inode.symlink.clone();
         dest_inode.mode = src_inode.mode;
         dest_inode.qid = QID {
             r#type: src_inode.qid.r#type,
             version: src_inode.qid.version,
             path: src_inode.qid.path
         };
-        dest_inode.caps = src_inode.caps;
+        dest_inode.caps = src_inode.caps.as_ref().map(|x| x.clone_me());
         // dest_inode.nlinks = src_inode.nlinks
-        dest_inode.sha256sum = src_inode.sha256sum;
-        dest_inode.locks = src_inode.locks;
+        dest_inode.sha256sum = src_inode.sha256sum.clone();
+        dest_inode.locks = src_inode.locks.clone();
         dest_inode.mount_id = src_inode.mount_id;
         dest_inode.foreign_id = src_inode.foreign_id;
     }
@@ -1007,29 +1039,37 @@ impl FS {
             }
         }
 
-        let idx = oldid.unwrap(); // idx contains the id which we want to rename
-        let inode = &mut self.inodes[idx];
+        // precompute for borrow checker
         let olddir = &self.inodes[olddirid];
+        let olddir_is_forwarder = FS::is_forwarder(olddir);
         let newdir = &self.inodes[newdirid];
+        let newdir_is_forwarder = FS::is_forwarder(newdir);
+        let olddir_mount_id = olddir.mount_id;
+        let olddir_foreign_id = olddir.foreign_id;
+        let newdir_mount_id = newdir.mount_id;
+        let newdir_foreign_id = newdir.foreign_id;
 
-        if !FS::is_forwarder(olddir) && !FS::is_forwarder(newdir)
+        let idx = oldid.unwrap(); // idx contains the id which we want to rename
+        //let inode = &mut self.inodes[idx];
+        //let newdir = &self.inodes[newdirid];
+
+        if !olddir_is_forwarder && !newdir_is_forwarder
         {
             // Move inode within current filesystem.
 
             self.unlink_from_dir(olddirid, oldname);
             self.link_under_dir(newdirid, idx, newname);
 
-            inode.qid.version += 1;
+            self.inodes[idx].qid.version += 1;
         }
-        else if FS::is_forwarder(olddir) && newdir.mount_id.is_some() && olddir.mount_id.unwrap() == newdir.mount_id.unwrap()
+        else if olddir_is_forwarder
+            && newdir_mount_id.is_some()
+            && olddir_mount_id.unwrap() == newdir_mount_id.unwrap()
         {
             // Move inode within the same child filesystem.
             
-            let old_dir_mount_id = olddir.mount_id.unwrap();
-            let old_dir_foreign_id = olddir.foreign_id.unwrap();
-            let new_dir_foreign_id = newdir.foreign_id.unwrap();
-            let ret = self.follow_fs_by_id_mut(old_dir_mount_id)
-                .rename(old_dir_foreign_id, oldname, new_dir_foreign_id, newname);
+            let ret = self.follow_fs_by_id_mut(olddir_mount_id.unwrap())
+                .rename(olddir_foreign_id.unwrap(), oldname, newdir_foreign_id.unwrap(), newname);
 
             if ret != SUCCESS {
                 return ret;
@@ -1056,37 +1096,63 @@ impl FS {
             // information into a new idx value.
             let diverted_old_idx = self.divert(olddirid, oldname);
             let old_real_inode = self.get_inode(idx);
+            let old_real_inode_size = old_real_inode.size;
 
-            let data = self.read(diverted_old_idx, 0, old_real_inode.size);
+            // DATA WAS HERE
 
-            if FS::is_forwarder(newdir)
+
+            if newdir_is_forwarder
             {
-                let newdir_mount_id = newdir.mount_id.unwrap();
-                let new_dir_foreign_id = newdir.foreign_id.unwrap();
-                // Create new inode.
-                let mut foreign_fs = self.follow_fs_by_id_mut(newdir_mount_id);
-                let foreign_id = if self.is_directory(diverted_old_idx)
-                    { foreign_fs.create_directory(newname, Some(new_dir_foreign_id)) }
-                    else { foreign_fs.create_file(newname, new_dir_foreign_id) };
+                // we'd like to do the copy_inode below with &self.get_inode(idx) but that takes immutable
+                // and mutable ref to self which we can't do, so we copy data first
+                let inode_source = &self.get_inode(idx);
+                let new_inode = &mut INode::new(inode_source.qid.path);
 
-                let new_real_inode = foreign_fs.get_inode(foreign_id);
-                FS::copy_inode(*old_real_inode, *new_real_inode);
+                FS::copy_inode(inode_source, new_inode);
+        
+                // Create new inode.
+                let diverted_old_idx_is_directory = self.is_directory(diverted_old_idx);
+                let foreign_fs = self.follow_fs_by_id_mut(newdir_mount_id.unwrap());
+                let foreign_id = if diverted_old_idx_is_directory
+                    { foreign_fs.create_directory(newname, Some(newdir_foreign_id.unwrap())) }
+                    else { foreign_fs.create_file(newname, newdir_foreign_id.unwrap()) };
+
+                let new_real_inode = foreign_fs.get_inode_mutable(foreign_id);
+                FS::copy_inode(new_inode, new_real_inode);
 
                 // Point to this new location.
-                self.set_forwarder(idx, newdir_mount_id, foreign_id);
+                self.set_forwarder(idx, newdir_mount_id.unwrap(), foreign_id);
             }
             else
             {
+                // delete forwarder had to be inlined bc of borrow checker
+                // self.delete_forwarder(&mut self.inodes[idx]);
+                debug_assert!(FS::is_forwarder(&self.inodes[idx]), "Filesystem delete_forwarder: expected forwarder");
+
+                let delete_forwarder_inode = &mut self.inodes[idx];
+                delete_forwarder_inode.status = STATUS_INVALID;
+                let delete_forwarder_inode_mount_id = delete_forwarder_inode.mount_id.unwrap();
+                let delete_forwarder_inode_foreign_id = delete_forwarder_inode.foreign_id.unwrap();
+                self.mounts[delete_forwarder_inode_mount_id].backtrack.remove(&delete_forwarder_inode_foreign_id);
+                
+                // copy data for borrow checker
+                let inode_source = &self.get_inode(idx);
+                let new_inode = &mut INode::new(inode_source.qid.path);
+                FS::copy_inode(inode_source, new_inode);
+        
                 // Replace current forwarder with real inode.
-                self.delete_forwarder(inode);
-                FS::copy_inode(*old_real_inode, *inode);
+                FS::copy_inode(new_inode, &mut self.inodes[idx]);
 
                 // Link into new location in this filesystem.
                 self.link_under_dir(newdirid, idx, newname);
             }
 
             // Rewrite data to newly created destination.
-            self.change_size(idx, old_real_inode.size);
+            self.change_size(idx, old_real_inode_size);
+            
+            // NOTE: MOVED THIS FROM ABOVE, undo if that breaks something (as far as I could tell it doesn't)
+            let data = self.read(diverted_old_idx, 0, old_real_inode_size);
+
             if data.is_some() && data.unwrap().len() > 0
             {
                 self.write_arr(idx, 0, data.unwrap().len(), data);
@@ -1122,7 +1188,7 @@ impl FS {
         return SUCCESS;
     }
 
-    pub fn write(&mut self, id : usize, offset : usize, count : usize, buffer : Option<UInt8Array>) {
+    pub fn write(&mut self, id : usize, offset : usize, count : usize, buffer : Option<&UInt8Array>) {
         self.write_arr(id, offset, count, buffer.map(|x| x.data.as_ref()));
     }
 
@@ -1358,7 +1424,7 @@ impl FS {
 
         let idx = idx_cond.unwrap();
 
-        let inode = &mut self.inodes[idx];
+        let inode = &self.inodes[idx];
         let parent_inode = &self.inodes[parentid];
         //message.Debug("Unlink " + inode.name);
 
@@ -1368,8 +1434,8 @@ impl FS {
             debug_assert!(FS::is_forwarder(inode), "Children of forwarders should be forwarders");
 
             let foreign_parentid = parent_inode.foreign_id;
-            let mount_id = parent_inode.mount_id.unwrap();
-            return self.follow_fs_by_id_mut(mount_id)
+            let mount_id = parent_inode.mount_id;
+            return self.follow_fs_by_id_mut(mount_id.unwrap())
                 .unlink(foreign_parentid.unwrap(), name);
 
             // Keep the forwarder dangling - file is still accessible.
@@ -2526,7 +2592,7 @@ impl FSMountInfo {
 /**
  * @constructor
  */
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct FSLockRegion {
     r#type : i32,
     start : i32,
@@ -2546,7 +2612,6 @@ impl FSLockRegion {
             client_id : "".to_owned()
         }
     }
-
 }
 /*
     public get_state() : Array<any> {
