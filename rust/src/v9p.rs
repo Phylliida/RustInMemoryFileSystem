@@ -6,6 +6,9 @@
 
 use crate::filesystem::{FS, UInt8Array};
 use crate::marshall::*;
+use crate::print_debug;
+use crate::wasi::Pipe::Stdout;
+use crate::wasi::wasi_print_internal;
 
 pub type Number = u64;
 
@@ -264,7 +267,7 @@ impl Virtio9p {
 
     pub fn build_reply(&mut self, id : u8, tag : u16, payloadsize : usize) {
         if (payloadsize+7) >= self.replybuffer.data.len() {
-            print_debug("Error in 9p: payloadsize exceeds maximum length");
+            print_debug!("Error in 9p: payloadsize exceeds maximum length");
         }
         let data = &mut *self.replybuffer.data;
         let mut offset = 0;

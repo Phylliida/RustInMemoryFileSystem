@@ -61,6 +61,17 @@ pub fn set_panic_hook() {
         panic::set_hook(Box::new(hook_impl));
     });
 }
+
+
+#[macro_export]
+macro_rules! print_debug {
+    ($($arg:tt)*) => {{
+        let s = &format!($($arg)*);
+        wasi_print_internal(Stdout, &(s.to_owned() + "\n"));
+    }}
+}
+
+
 #[macro_export]
 macro_rules! wasi_print {
     ($($arg:tt)*) => {{

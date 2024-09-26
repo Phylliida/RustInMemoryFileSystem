@@ -5,10 +5,6 @@ use std::io::Write;
 use crate::filesystem::{QID,UInt8Array};
 use std::str::from_utf8;
 
-pub fn print_debug(msg: &str) {
-    println!("{}", msg);
-}
-
 pub fn marshall_u8(val: u8, data: &mut [u8], offset: u64) -> u64 {
     let mut cursor = Cursor::new(data);
     cursor.set_position(offset);

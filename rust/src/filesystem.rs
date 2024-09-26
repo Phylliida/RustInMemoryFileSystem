@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::str::from_utf8;
 use std::cmp::min;
+use crate::wasi::Pipe::Stdout;
+use crate::print_debug;
+use crate::wasi::wasi_print_internal;
 use crate::wasi::clock_time_get;
 
 use crate::v9p::*;
@@ -860,13 +863,13 @@ impl FS {
         {
             // The actual inode is a root of some descendant filesystem.
             // Moving mountpoint across fs not supported - needs to update all corresponding forwarders.
-            print_debug(format!("XXX: Attempted to move mountpoint ({}) - skipped", oldname).as_str());
+            print_debug!("XXX: Attempted to move mountpoint ({}) - skipped", oldname);
             return EPERM;
         }
         else if !self.is_directory(idx) && self.get_inode(idx).nlinks > 1
         {
             // Move hardlinked inode vertically in mount tree.
-            print_debug(format!("XXX: Attempted to move hardlinked file ({}) across filesystems - skipped", oldname).as_str());
+            print_debug!("XXX: Attempted to move hardlinked file ({}) across filesystems - skipped", oldname);
             return EPERM;
         }
         else
@@ -1174,7 +1177,7 @@ impl FS {
         {
             if !FS::is_forwarder(inode) || inode.mount_id.unwrap() != parent_inode.mount_id.unwrap()
             {
-                print_debug("XXX: Attempted to hardlink a file into a child filesystem - skipped");
+                print_debug!("XXX: Attempted to hardlink a file into a child filesystem - skipped");
                 return EPERM;
             }
             let parent_inode_mount_id = parent_inode.mount_id.unwrap();
@@ -1186,7 +1189,7 @@ impl FS {
 
         if FS::is_forwarder(inode)
         {
-            print_debug("XXX: Attempted to hardlink file across filesystems - skipped");
+            print_debug!("XXX: Attempted to hardlink file across filesystems - skipped");
             return EPERM;
         }
 
@@ -1543,25 +1546,25 @@ impl FS {
 
             let inode = self.get_inode(i);
             if inode.nlinks < 0 {
-                print_debug(format!("Error in filesystem: negative nlinks={} at id ={}", inode.nlinks, i).as_str());
+                print_debug!("Error in filesystem: negative nlinks={} at id ={}", inode.nlinks, i);
             }
 
             if self.is_directory(i)
             {
                 if self.is_directory(i) && self.get_parent(i).is_none() {
-                    print_debug(format!("Error in filesystem: negative parent id {}", i).as_str());
+                    print_debug!("Error in filesystem: negative parent id {}", i);
                 }
                 
                 let inode_const = self.get_inode(i);
                 for (name, id) in inode_const.direntries.iter()
                 {
                     if name.len() == 0 {
-                        print_debug(format!("Error in filesystem: inode with no name and id {}", id).as_str());
+                        print_debug!("Error in filesystem: inode with no name and id {}", id);
                     }
 
                     for c in name.chars() {
                         if (c as u32) < 32 {
-                            print_debug("Error in filesystem: Unallowed char in filename");
+                            print_debug!("Error in filesystem: Unallowed char in filename");
                         }
                     }
                 }
@@ -1928,12 +1931,12 @@ impl FS {
 
         if path_infos.parentid.is_none()
         {
-            print_debug(format!("Mount failed: parent for path not found: {}", path).as_str());
+            print_debug!("Mount failed: parent for path not found: {}", path);
             return (None, ENOENT);
         }
         if path_infos.id.is_none()
         {
-            print_debug(format!("Mount failed: file already exists at path: {}", path).as_str());
+            print_debug!("Mount failed: file already exists at path: {}", path);
             return (None, EEXIST);
         }
         if path_infos.forward_path.is_some()
