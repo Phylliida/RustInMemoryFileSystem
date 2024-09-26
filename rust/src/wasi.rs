@@ -244,7 +244,7 @@ pub extern "C" fn fd_datasync(fd: i32) -> i32 {
         EBADF // invalid file (file doesn't exist)
     }
 }
-/*
+
 // fd_fdstat_get
 // Get metadata of a file descriptor.
 // Description
@@ -256,30 +256,18 @@ pub extern "C" fn fd_datasync(fd: i32) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
-    if let Some(fd_index) = fd_to_index(fd) {
-        let fs = GLOBAL_FS.lock().unwrap();
-        if fs.is_index_valid(fd_index) {
-            let file : &Inode = fs.get_inode(fd_index);
-            buf_ptr.fs_filetype = file.qid.r#type;
-            buf_ptr.fs.flags = 
-            pub fs_flags: FdFlags,
-            pub fs_rights_base: Rights,
-            pub fs_rights_inheriting: Rights,        
-            // we don't currently use datasync, just return success
-            SUCCESS
-        }
-        else {
-            EBADF // invalid file (file doesn't exist)
-        }
-    }
-    else if let Some(fd_pipe) = fd_to_pipe(fd) {
-        SUCCESS // we don't do anything for pipes
-    }
-    else {
-        EBADF // invalid file (negative)
+    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+        return SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
+    };
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fid(fd) {
+        // todo: fill in FdStat
+        SUCCESS
+    } else {
+        EBADF // invalid file (file doesn't exist)
     }
 }
-
+/*
 
 /// Adjust the flags associated with a file descriptor.
 /// Note: This is similar to `fcntl(fd, F_SETFL, flags)` in POSIX.
