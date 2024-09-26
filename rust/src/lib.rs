@@ -30,8 +30,6 @@ pub extern "C" fn main() {
     else {
         wasi_print!("got no text");
     }
-    let bees : Option<i32> = None;
-    bees.unwrap();
 
     let directory = fs.create_directory("applebees wow", Some(fs.root_id));
     let beesptr2 = fs.create_text_file(path, directory, "applebeeeeeees2");
