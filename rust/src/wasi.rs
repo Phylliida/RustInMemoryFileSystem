@@ -3,7 +3,8 @@ use crate::filesystem::*;
 use crate::v9p::*;
 use std::panic;
 use std::backtrace::Backtrace;
-use crate::wasi_print;
+use crate::wasi_err;
+use crate::wasi::Pipe::Stderr;
 
 //use libc::stat;
 
@@ -35,20 +36,20 @@ fn hook_impl(info: &panic::PanicHookInfo) {
 
     // Print panic information
     if let Some(location) = info.location() {
-        wasi_print!("Panic occurred in file '{}' at line {}", location.file(), location.line());
+        wasi_err!("Panic occurred in file '{}' at line {}", location.file(), location.line());
     } else {
-        wasi_print!("Panic occurred but can't get location information...");
+        wasi_err!("Panic occurred but can't get location information...");
     }
 
     // Print panic payload (error message)
     if let Some(message) = info.payload().downcast_ref::<&str>() {
-        wasi_print!("Panic message: {}", message);
+        wasi_err!("Panic message: {}", message);
     } else {
-        wasi_print!("Panic occurred without a message");
+        wasi_err!("Panic occurred without a message");
     }
 
     // Print the backtrace
-    wasi_print!("Stack backtrace:\n{}", backtrace);
+    wasi_err!("Stack backtrace:\n{}", backtrace);
 }
 /// Set the `console.error` panic hook the first time this is called. Subsequent
 /// invocations do nothing.
@@ -64,11 +65,19 @@ pub fn set_panic_hook() {
 macro_rules! wasi_print {
     ($($arg:tt)*) => {{
         let s = &format!($($arg)*);
-        wasi_print_internal(&(s.to_owned() + "\n"));
+        wasi_print_internal(Stdout, &(s.to_owned() + "\n"));
     }}
 }
 
-pub fn wasi_print_internal(msg: &String) -> Errno {
+#[macro_export]
+macro_rules! wasi_err {
+    ($($arg:tt)*) => {{
+        let s = &format!($($arg)*);
+        wasi_print_internal(Stderr, &(s.to_owned() + "\n"));
+    }}
+}
+
+pub fn wasi_print_internal(pipe : Pipe, msg: &String) -> Errno {
     let str_bytes = &*msg.as_bytes();
     let ciovec = Ciovec {
         buf: str_bytes.as_ptr(),
@@ -77,7 +86,7 @@ pub fn wasi_print_internal(msg: &String) -> Errno {
     let ciovecs = [ciovec];
     let mut nwritten = 0;
     unsafe {
-        return fd_write(1, ciovecs.as_ptr(), ciovecs.len(), &mut nwritten)
+        return fd_write(pipe as u32, ciovecs.as_ptr(), ciovecs.len(), &mut nwritten)
     }
 }
 

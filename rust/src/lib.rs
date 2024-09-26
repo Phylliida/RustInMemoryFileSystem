@@ -3,6 +3,7 @@
 
 use crate::filesystem::FS;
 use crate::wasi::{set_panic_hook, wasi_print_internal};
+use crate::wasi::Pipe::Stdout;
 
 // TODO: STATUS_ON_STORAGE STUFF (local filestorage? can't in pure wasm)
 // TODO: clone_me rename to clone once I'm done with porting (For Uint8Array)
@@ -12,7 +13,6 @@ mod filesystem;
 mod marshall;
 mod v9p;
 mod wasi;
-
 
 
 
@@ -30,6 +30,8 @@ pub extern "C" fn main() {
     else {
         wasi_print!("got no text");
     }
+    let bees : Option<i32> = None;
+    bees.unwrap();
 
     let directory = fs.create_directory("applebees wow", Some(fs.root_id));
     let beesptr2 = fs.create_text_file(path, directory, "applebeeeeeees2");
