@@ -37,7 +37,7 @@ pub struct FdStat {
 
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 extern "C" {
-    // needed for stdin/stdout/stderr
+    // needed for stdin/stdout/stderr (mostly, for panic to be able to print)
     pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> Errno;
     // needed to set file times
     pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> i32;
