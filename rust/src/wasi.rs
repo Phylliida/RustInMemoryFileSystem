@@ -104,10 +104,38 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 
     }
 }
 
+// fd_allocate
+// Allocate extra space for a file descriptor.
+// Description
+// The fd_allocate function is used to allocate additional space for a file descriptor. It allows extending the size of a file or buffer associated with the file descriptor.
+// Parameters
+// fd: The file descriptor to allocate space for.
+// offset: The offset from the start marking the beginning of the allocation.
+// len: The length from the offset marking the end of the allocation.
+pub fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
+    if offset < 0 || len <= 0 {
+        return EINVAL; 
+    }
+    if let Some(fd_index) = fd_to_index(fd) {
+        let mut fs = GLOBAL_FS.lock().unwrap();
+        if fs.is_index_valid(fd_index) {
+            if fs.get_size(fd_index) < (offset + len) as usize {
+                fs.change_size(fd_index, (offset+len) as usize);
+            }
+            SUCCESS
+        }
+        else {
+            EBADF // invalid file (file doesn't exist)
+        }
+    }
+    else if let Some(fd_pipe) = fd_to_pipe(fd) {
+        ESPIPE // invalid file (it's a pipe)
+    }
+    else {
+        EBADF // invalid file (negative)
+    }
+}
 /*
-/// Force the allocation of space in a file.
-/// Note: This is similar to `posix_fallocate` in POSIX.
-pub fn fd_allocate(arg0: i32, arg1: i64, arg2: i64) -> i32;
 /// Close a file descriptor.
 /// Note: This is similar to `close` in POSIX.
 pub fn fd_close(arg0: i32) -> i32;

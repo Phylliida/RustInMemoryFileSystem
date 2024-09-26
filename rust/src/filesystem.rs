@@ -1336,6 +1336,11 @@ impl FS {
 
         return inode;
     }
+
+    pub fn get_size(&mut self, idx : usize) -> usize {
+        return self.inodes[idx].size;
+    }
+
     pub fn change_size(&mut self, idx : usize, newsize : usize) {
         let inode : &mut INode = self.get_inode_mutable(idx);
         //message.Debug("change size to: " + newsize);
