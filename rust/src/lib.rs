@@ -1,7 +1,7 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-use crate::filesystem::FS;
+use crate::v9p::Virtio9p;
 use crate::wasi::{set_panic_hook, wasi_print_internal};
 use crate::wasi::Pipe::Stdout;
 
@@ -20,21 +20,21 @@ mod wasi;
 pub extern "C" fn main() {
     set_panic_hook();
     wasi_print!("hi!");
-    let mut fs = FS::new(None);
+    let mut fs = Virtio9p::new(None);
     let path = "bees.bepis";
-    let beesptr = fs.create_text_file(path, fs.root_id, "applebeeeeeees");
+    let beesptr = fs.fs.create_text_file(path, fs.fs.root_id, "applebeeeeeees");
     wasi_print!("got file {}", beesptr);
-    if let Some(result_text) = fs.read_text_file(path) {
+    if let Some(result_text) = fs.fs.read_text_file(path) {
         wasi_print!("got text {}", result_text);
     }
     else {
         wasi_print!("got no text");
     }
 
-    let directory = fs.create_directory("applebees wow", Some(fs.root_id));
-    let beesptr2 = fs.create_text_file(path, directory, "applebeeeeeees2");
-    wasi_print!("got file 2 {} with full path {}", beesptr2, fs.get_full_path(directory));
-    if let Some(result_text) = fs.read_text_file("/applebees wow/bees.bepis") {
+    let directory = fs.fs.create_directory("applebees wow", Some(fs.fs.root_id));
+    let beesptr2 = fs.fs.create_text_file(path, directory, "applebeeeeeees2");
+    wasi_print!("got file 2 {} with full path {}", beesptr2, fs.fs.get_full_path(directory));
+    if let Some(result_text) = fs.fs.read_text_file("/applebees wow/bees.bepis") {
         wasi_print!("got text 2 {}", result_text);
     }
     else {

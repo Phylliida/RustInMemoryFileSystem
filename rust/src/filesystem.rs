@@ -2261,9 +2261,9 @@ impl FS {
 //#[derive(Serialize, Deserialize, Debug)]
 pub struct QID {
     // r# is needed because type is a keyword
-    pub r#type: u8,
-    pub version: u32,
-    pub path: u64
+    pub r#type : u8,
+    pub version : u32,
+    pub path : u64
 }
 
 /** @constructor */

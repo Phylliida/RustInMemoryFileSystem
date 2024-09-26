@@ -5,10 +5,11 @@
 // 9P2000.L protocol ( https://code.google.com/p/diod/wiki/protocol )
 
 use crate::filesystem::{FS, UInt8Array};
-use crate::marshall::*;
-use crate::print_debug;
-use crate::wasi::Pipe::Stdout;
-use crate::wasi::wasi_print_internal;
+//use crate::marshall::*;
+//use crate::print_debug;
+//use crate::wasi::wasi_print_internal;
+use crate::wasi::*;
+use std::collections::HashMap;
 
 pub type Number = u64;
 
@@ -76,6 +77,9 @@ pub const FID_NONE : i32 = -1;
 pub const FID_INODE : i32 = 1;
 pub const FID_XATTR : i32 = 2;
 
+pub const STDIN_FD : i32 = 0;
+pub const STDOUT_FD : i32 = 1;
+pub const STDERR_FD : i32 = 2;
 
 // TODO: bus
 
@@ -89,14 +93,18 @@ pub struct Virtio9p {
     pub msize : usize,
     pub replybuffer : UInt8Array,
     pub replybuffersize : usize,
-    pub fids : Vec<FID>
+    pub fids : HashMap<usize, FID>,
+    pub next_fid : usize
 }
+const PIPE_MAX_FD : i32 = 2; 
 
+
+
+#[derive(Clone)]
 pub struct FID {
-    pub inodeid : usize,
-    pub r#type : u8,
-    pub uid : i32,
-    pub dbg_name : String
+    pub inode_id : usize,
+    pub fid_type : u8,
+    pub fid : usize,
 }
 
 impl Virtio9p {
@@ -106,11 +114,17 @@ impl Virtio9p {
     * @param {FS} filesystem
     * @param {CPU} cpu
     */
-    pub fn new(fs : FS) -> Virtio9p { // todo: pass in cpu and bus
+    pub fn new(fs : Option<FS>) -> Virtio9p { // todo: pass in cpu and bus
         let configspace_tagname = [0x68, 0x6F, 0x73, 0x74, 0x39, 0x70];
         let msize = 8192;
-        Virtio9p {
-            fs: fs,
+        let fs_internal = 
+            if fs.is_some() {
+                fs.unwrap()
+            } else {
+                FS::new(None)
+            };
+        let result = Virtio9p {
+            fs: fs_internal,
             configspace_tagname: configspace_tagname, // "host9p" string
             configspace_taglen: configspace_tagname.len(),
             version: "9P2000.L".to_owned(),
@@ -118,9 +132,59 @@ impl Virtio9p {
             msize: msize,
             replybuffer: UInt8Array::new(msize*2),
             replybuffersize: 0,
-            fids : Vec::new(),
+            fids : HashMap::new(),
+            next_fid: (PIPE_MAX_FD+1) as usize,
+        };
+
+        return result;
+    }
+
+    pub fn get_iostream_fid(fid: i32) -> Option<Pipe> {
+        match fid {
+            0 => Some(Pipe::Stdin),
+            1 => Some(Pipe::Stdout),
+            2 => Some(Pipe::Stderr),
+            _ => None,
         }
     }
+
+    pub fn get_file_fid(&self, fd: i32) -> Option<usize> {
+        if fd > PIPE_MAX_FD && self.fids.contains_key(&(fd as usize)) {
+            return Some(fd as usize)
+        }
+        else {
+            None
+        }
+    }
+    
+    // Note: dbg_name is only used for debugging messages and may not be the same as the filename,
+    // since it is not synchronised with renames done outside of 9p. Hard-links, linking and unlinking
+    // operations also mean that having a single filename no longer makes sense.
+    // Set TRACK_FILENAMES = true (in config.js) to sync dbg_name during 9p renames.
+    pub fn create_fid(&mut self, inode_id: usize, fid_type: u8) -> &FID {
+        let result = FID {
+            inode_id: inode_id, 
+            fid_type: fid_type,
+            fid: self.next_fid
+        };
+        self.next_fid += 1;
+        let fid = result.fid;
+        self.fids.insert(fid, result);
+        return self.fids.get(&fid).unwrap();
+    }
+
+    pub fn close_fid(&mut self, fid: usize) {
+        self.fids.remove(&fid);
+        //fid. // TODO: set closed state?
+    }
+
+    pub fn allocate(&mut self, fid: usize, offset: i64, len: i64) {
+        let inode_id = self.fids[&fid].inode_id;
+        if self.fs.get_size(inode_id) < (offset + len) as usize {
+            self.fs.change_size(inode_id, (offset+len) as usize);
+        }
+    }
+
     /*
         /** @type {VirtIO} */
         this.virtio = new VirtIO(cpu,
@@ -237,19 +301,8 @@ impl Virtio9p {
         this.fs.set_state(state[9]);
     }
     */
-    // Note: dbg_name is only used for debugging messages and may not be the same as the filename,
-    // since it is not synchronised with renames done outside of 9p. Hard-links, linking and unlinking
-    // operations also mean that having a single filename no longer makes sense.
-    // Set TRACK_FILENAMES = true (in config.js) to sync dbg_name during 9p renames.
-    pub fn createfid(inodeid: usize, r#type: u8, uid: i32, dbg_name: &str) -> FID {
-        FID {
-            inodeid: inodeid, 
-            r#type: r#type,
-            uid:  uid,
-            dbg_name: dbg_name.to_owned().clone()
-        }
-    }
 
+    /*
     pub fn update_dbg_name(&mut self, idx: usize, newname: &str)
     {
         for fid in &mut self.fids
@@ -261,7 +314,7 @@ impl Virtio9p {
     }
 
     pub fn reset(&mut self) {
-        self.fids = Vec::new();
+        self.fids = HashMap::new();
         //TODO self.virtio.reset();    
     }
 
@@ -285,7 +338,7 @@ impl Virtio9p {
         let size = marshall_u32(errorcode, data, 7); // put error code after the stuff written below
         self.build_reply(6, tag, size as usize);
     }
-
+    */
     /*
     pub fn send_reply(bufchain) {
         dbg_assert(this.replybuffersize >= 0, "9P: Negative replybuffersize");

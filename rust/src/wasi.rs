@@ -1,10 +1,10 @@
 
-use crate::filesystem::*;
 use crate::v9p::*;
 use std::panic;
 use std::backtrace::Backtrace;
 use crate::wasi_err;
 use crate::wasi::Pipe::Stderr;
+use crate::v9p::Virtio9p;
 
 //use libc::stat;
 
@@ -17,15 +17,29 @@ type Size = usize;
 type Errno = i32;
 type Rval = u32;
 
+type Filetype = u8;
+type FdFlags = u16;
+type Rights = u64;
+
 #[repr(C)]
 pub struct Ciovec {
     buf: *const u8,
     buf_len: Size,
 }
 
+#[repr(C)]
+pub struct FdStat {
+    pub fs_filetype: Filetype,
+    pub fs_flags: FdFlags,
+    pub fs_rights_base: Rights,
+    pub fs_rights_inheriting: Rights,
+}
+
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 extern "C" {
+    // needed for stdin/stdout/stderr
     pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> Errno;
+    // needed to set file times
     pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> i32;
 }
 
@@ -112,44 +126,15 @@ pub fn get_file_name<'a>(path: *const u8, path_len: usize) -> &'a str {
 
 use std::sync::{LazyLock, Mutex};
 
-static GLOBAL_FS: LazyLock<Mutex<FS>> = LazyLock::new(|| Mutex::new(FS::new(None)));
+static GLOBAL_FS: LazyLock<Mutex<Virtio9p>> = LazyLock::new(|| Mutex::new(Virtio9p::new(None)));
 
 const PIPE_MAX_FD : i32 = 2; 
-
-
-pub fn fd_to_index(fd: i32) -> Option<usize> {
-    // first few fds are for stdout/stdin/stderr
-    if fd <= PIPE_MAX_FD {
-        None
-    }
-    else {
-        // 3 corresponds to 0, etc.
-        Some((fd - PIPE_MAX_FD - 1) as usize)
-    }
-}
-
-
-
 
 #[repr(i32)]
 pub enum Pipe {
     Stdin = 0,
     Stdout = 1,
     Stderr = 2   
-}
-
-pub fn fd_to_pipe(fd: i32) -> Option<Pipe> {
-    match fd {
-        0 => Some(Pipe::Stdin),
-        1 => Some(Pipe::Stdout),
-        2 => Some(Pipe::Stderr),
-        _ => None,
-    }
-}
-
-pub fn index_to_fd(index: usize) -> i32 {
-    // 0 -> 3, 1 -> 4, ...
-    return (index as i32) + PIPE_MAX_FD + 1;
 }
 
 // definitions and comments from https://github.com/wasm-forge/ic-wasi-polyfill/blob/main/src/wasi.rs#L2178C7-L2374C59
@@ -175,6 +160,8 @@ pub fn index_to_fd(index: usize) -> i32 {
 //pub fn clock_time_get(arg0: i32, arg1: i64, arg2: i32) -> i32;
 
 
+
+
 /// Provide file advisory information on a file descriptor.
 // (predeclare an access pattern for file data)
 /// Note: This is similar to `posix_fadvise` in POSIX.
@@ -186,20 +173,16 @@ pub fn index_to_fd(index: usize) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 {
-    if let Some(fd_index) = fd_to_index(fd) {
-        if GLOBAL_FS.lock().unwrap().is_index_valid(fd_index) {
-            // we don't currently use advise, just return success
-            SUCCESS
-        }
-        else {
-            EBADF // invalid file (file doesn't exist)
-        }
+    if fd < 0 {
+        return EINVAL; // invalid file (negative) // posix_fadvise says we should return this if negative
     }
-    else if let Some(fd_pipe) = fd_to_pipe(fd) {
+    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
         ESPIPE // invalid file (it's a pipe)
-    }
-    else {
-        EINVAL // invalid file (negative)
+    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fid(fd) {
+        // we don't currently use advise, just return success
+        SUCCESS
+    } else {
+        EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -215,50 +198,35 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 
 #[inline(never)]
 pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
     if offset < 0 || len <= 0 {
-        return EINVAL; 
+        return EINVAL;
     }
-    if let Some(fd_index) = fd_to_index(fd) {
-        let mut fs = GLOBAL_FS.lock().unwrap();
-        if fs.is_index_valid(fd_index) {
-            if fs.get_size(fd_index) < (offset + len) as usize {
-                fs.change_size(fd_index, (offset+len) as usize);
-            }
-            SUCCESS
-        }
-        else {
-            EBADF // invalid file (file doesn't exist)
-        }
+    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+        return ESPIPE; // invalid file (it's a pipe)
     }
-    else if let Some(fd_pipe) = fd_to_pipe(fd) {
-        ESPIPE // invalid file (it's a pipe)
-    }
-    else {
-        EBADF // invalid file (negative)
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fid(fd) {
+        fs.allocate(fd_file, offset, len);
+        SUCCESS
+    } else {
+        EBADF // invalid file (file doesn't exist)
     }
 }
 
-/// Close (deletes?) a file descriptor.
-// TODO: is this correct? maybe we should just return SUCCESS? I'm not sure
+/// Close a file descriptor.
 // fd: The file descriptor mapping to an open file to close.
 /// Note: This is similar to `close` in POSIX.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_close(fd: i32) -> i32 {
-    if let Some(fd_index) = fd_to_index(fd) {
-        let mut fs = GLOBAL_FS.lock().unwrap();
-        if fs.is_index_valid(fd_index) {
-            fs.close_inode(fd_index);
-            SUCCESS
-        }
-        else {
-            EBADF // invalid file (file doesn't exist)
-        }
-    }
-    else if let Some(fd_pipe) = fd_to_pipe(fd) {
-        SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
-    }
-    else {
-        EBADF // invalid file (negative)
+    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+        return SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
+    };
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fid(fd) {
+        fs.close_fid(fd_file);
+        SUCCESS
+    } else {
+        EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -267,20 +235,13 @@ pub extern "C" fn fd_close(fd: i32) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_datasync(fd: i32) -> i32 {
-    if let Some(fd_index) = fd_to_index(fd) {
-        if GLOBAL_FS.lock().unwrap().is_index_valid(fd_index) {
-            // we don't currently use datasync, just return success
-            SUCCESS
-        }
-        else {
-            EBADF // invalid file (file doesn't exist)
-        }
-    }
-    else if let Some(fd_pipe) = fd_to_pipe(fd) {
-        SUCCESS // we don't do anything for pipes
-    }
-    else {
-        EBADF // invalid file (negative)
+    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+        SUCCESS // also does nothing for pipes
+    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fid(fd) {
+        // we don't currently use advise, just return success
+        SUCCESS
+    } else {
+        EBADF // invalid file (file doesn't exist)
     }
 }
 /*
@@ -294,9 +255,16 @@ pub extern "C" fn fd_datasync(fd: i32) -> i32 {
 // buf_ptr: A WebAssembly pointer to a memory location where the metadata will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_get(fd: i32, buf: *mut stat) -> i32 {
+pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
     if let Some(fd_index) = fd_to_index(fd) {
-        if GLOBAL_FS.lock().unwrap().is_index_valid(fd_index) {
+        let fs = GLOBAL_FS.lock().unwrap();
+        if fs.is_index_valid(fd_index) {
+            let file : &Inode = fs.get_inode(fd_index);
+            buf_ptr.fs_filetype = file.qid.r#type;
+            buf_ptr.fs.flags = 
+            pub fs_flags: FdFlags,
+            pub fs_rights_base: Rights,
+            pub fs_rights_inheriting: Rights,        
             // we don't currently use datasync, just return success
             SUCCESS
         }
