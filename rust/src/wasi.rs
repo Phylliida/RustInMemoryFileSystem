@@ -1,6 +1,85 @@
 
 use crate::filesystem::*;
 use crate::v9p::*;
+use std::panic;
+use std::backtrace::Backtrace;
+use crate::wasi_print;
+
+//use libc::stat;
+
+pub type ClockID = u32;
+pub type Timestamp = u64;
+
+// from https://www.jakubkonka.com/2020/04/28/rust-wasi-from-scratch.html
+type Fd = u32;
+type Size = usize;
+type Errno = i32;
+type Rval = u32;
+
+#[repr(C)]
+pub struct Ciovec {
+    buf: *const u8,
+    buf_len: Size,
+}
+
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+extern "C" {
+    pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> Errno;
+    pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> i32;
+}
+
+
+// from https://github.com/rustwasm/console_error_panic_hook/blob/master/src/lib.rs
+fn hook_impl(info: &panic::PanicHookInfo) {
+    let backtrace = Backtrace::capture();
+
+    // Print panic information
+    if let Some(location) = info.location() {
+        wasi_print!("Panic occurred in file '{}' at line {}", location.file(), location.line());
+    } else {
+        wasi_print!("Panic occurred but can't get location information...");
+    }
+
+    // Print panic payload (error message)
+    if let Some(message) = info.payload().downcast_ref::<&str>() {
+        wasi_print!("Panic message: {}", message);
+    } else {
+        wasi_print!("Panic occurred without a message");
+    }
+
+    // Print the backtrace
+    wasi_print!("Stack backtrace:\n{}", backtrace);
+}
+/// Set the `console.error` panic hook the first time this is called. Subsequent
+/// invocations do nothing.
+#[inline]
+pub fn set_panic_hook() {
+    use std::sync::Once;
+    static SET_HOOK: Once = Once::new();
+    SET_HOOK.call_once(|| {
+        panic::set_hook(Box::new(hook_impl));
+    });
+}
+#[macro_export]
+macro_rules! wasi_print {
+    ($($arg:tt)*) => {{
+        let s = &format!($($arg)*);
+        wasi_print_internal(&(s.to_owned() + "\n"));
+    }}
+}
+
+pub fn wasi_print_internal(msg: &String) -> Errno {
+    let str_bytes = &*msg.as_bytes();
+    let ciovec = Ciovec {
+        buf: str_bytes.as_ptr(),
+        buf_len: str_bytes.len(),
+    };
+    let ciovecs = [ciovec];
+    let mut nwritten = 0;
+    unsafe {
+        return fd_write(1, ciovecs.as_ptr(), ciovecs.len(), &mut nwritten)
+    }
+}
 
 // from wasm-forge/ic-wasi-polyfill
 
@@ -89,7 +168,7 @@ pub fn index_to_fd(index: usize) -> i32 {
 pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 {
     if let Some(fd_index) = fd_to_index(fd) {
         if GLOBAL_FS.lock().unwrap().is_index_valid(fd_index) {
-            // we don't currently use advise, just return error
+            // we don't currently use advise, just return success
             SUCCESS
         }
         else {
@@ -112,7 +191,9 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 
 // fd: The file descriptor to allocate space for.
 // offset: The offset from the start marking the beginning of the allocation.
 // len: The length from the offset marking the end of the allocation.
-pub fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
     if offset < 0 || len <= 0 {
         return EINVAL; 
     }
@@ -135,16 +216,83 @@ pub fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
         EBADF // invalid file (negative)
     }
 }
-/*
-/// Close a file descriptor.
+
+/// Close (deletes?) a file descriptor.
+// TODO: is this correct? maybe we should just return SUCCESS? I'm not sure
+// fd: The file descriptor mapping to an open file to close.
 /// Note: This is similar to `close` in POSIX.
-pub fn fd_close(arg0: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_close(fd: i32) -> i32 {
+    if let Some(fd_index) = fd_to_index(fd) {
+        let mut fs = GLOBAL_FS.lock().unwrap();
+        if fs.is_index_valid(fd_index) {
+            fs.close_inode(fd_index);
+            SUCCESS
+        }
+        else {
+            EBADF // invalid file (file doesn't exist)
+        }
+    }
+    else if let Some(fd_pipe) = fd_to_pipe(fd) {
+        SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
+    }
+    else {
+        EBADF // invalid file (negative)
+    }
+}
+
 /// Synchronize the data of a file to disk.
 /// Note: This is similar to `fdatasync` in POSIX.
-pub fn fd_datasync(arg0: i32) -> i32;
-/// Get the attributes of a file descriptor.
-/// Note: This returns similar flags to `fsync(fd, F_GETFL)` in POSIX, as well as additional fields.
-pub fn fd_fdstat_get(arg0: i32, arg1: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_datasync(fd: i32) -> i32 {
+    if let Some(fd_index) = fd_to_index(fd) {
+        if GLOBAL_FS.lock().unwrap().is_index_valid(fd_index) {
+            // we don't currently use datasync, just return success
+            SUCCESS
+        }
+        else {
+            EBADF // invalid file (file doesn't exist)
+        }
+    }
+    else if let Some(fd_pipe) = fd_to_pipe(fd) {
+        SUCCESS // we don't do anything for pipes
+    }
+    else {
+        EBADF // invalid file (negative)
+    }
+}
+/*
+// fd_fdstat_get
+// Get metadata of a file descriptor.
+// Description
+// The fd_fdstat_get() function is used to retrieve the metadata of a file descriptor. It provides information about the state of the file descriptor, such as its rights, flags, and file type.
+// In POSIX systems, file descriptors are small, non-negative integers used to represent open files, sockets, or other I/O resources. They serve as handles that allow processes to read from or write to these resources. The fd_fdstat_get() function allows applications to retrieve information about a specific file descriptor, gaining insights into its properties and characteristics.
+// Parameters
+// fd: The file descriptor whose metadata will be accessed.
+// buf_ptr: A WebAssembly pointer to a memory location where the metadata will be written.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_fdstat_get(fd: i32, buf: *mut stat) -> i32 {
+    if let Some(fd_index) = fd_to_index(fd) {
+        if GLOBAL_FS.lock().unwrap().is_index_valid(fd_index) {
+            // we don't currently use datasync, just return success
+            SUCCESS
+        }
+        else {
+            EBADF // invalid file (file doesn't exist)
+        }
+    }
+    else if let Some(fd_pipe) = fd_to_pipe(fd) {
+        SUCCESS // we don't do anything for pipes
+    }
+    else {
+        EBADF // invalid file (negative)
+    }
+}
+
+
 /// Adjust the flags associated with a file descriptor.
 /// Note: This is similar to `fcntl(fd, F_SETFL, flags)` in POSIX.
 pub fn fd_fdstat_set_flags(arg0: i32, arg1: i32) -> i32;

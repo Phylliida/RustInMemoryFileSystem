@@ -1,11 +1,11 @@
 
-use serde::{Serialize, Deserialize};
+//use serde::{Serialize, Deserialize};
 use crate::marshall::*;
 use std::collections::HashMap;
 use std::vec::Vec;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::str::from_utf8;
 use std::cmp::min;
+use crate::wasi::clock_time_get;
 
 use crate::v9p::*;
 
@@ -15,32 +15,32 @@ use crate::v9p::*;
 // Implementation of a unix filesystem in memory.
 // Ported to rust, from v86 js emulator
 
-pub type Number = i64;
+pub const CLOCK_REALTIME : u32 = 0;
 
-const S_IRWXUGO: i32 = 0x1FF;
-const S_IFMT: i32 = 0xF000;
-const S_IFSOCK: i32 = 0xC000;
-const S_IFLNK: i32 = 0xA000;
-const S_IFREG: i32 = 0x8000;
-const S_IFBLK: i32 = 0x6000;
-const S_IFDIR: i32 = 0x4000;
-const S_IFCHR: i32 = 0x2000;
+pub const S_IRWXUGO: i32 = 0x1FF;
+pub const S_IFMT: i32 = 0xF000;
+pub const S_IFSOCK: i32 = 0xC000;
+pub const S_IFLNK: i32 = 0xA000;
+pub const S_IFREG: i32 = 0x8000;
+pub const S_IFBLK: i32 = 0x6000;
+pub const S_IFDIR: i32 = 0x4000;
+pub const S_IFCHR: i32 = 0x2000;
 
 //var S_IFIFO  0010000
 //var S_ISUID  0004000
 //var S_ISGID  0002000
 //var S_ISVTX  0001000
 
-const O_RDONLY: i32 = 0x0000; // open for reading only
-const O_WRONLY: i32 = 0x0001; // open for writing only
-const O_RDWR: i32 = 0x0002; // open for reading and writing
-const O_ACCMODE: i32 = 0x0003; // mask for above modes
+pub const O_RDONLY: i32 = 0x0000; // open for reading only
+pub const O_WRONLY: i32 = 0x0001; // open for writing only
+pub const O_RDWR: i32 = 0x0002; // open for reading and writing
+pub const O_ACCMODE: i32 = 0x0003; // mask for above modes
 
-const STATUS_INVALID: i32 = -0x1;
-const STATUS_OK: i32 = 0x0;
-const STATUS_ON_STORAGE: i32 = 0x2;
-const STATUS_UNLINKED: i32 = 0x4;
-const STATUS_FORWARDING: i32 = 0x5;
+pub const STATUS_INVALID: i32 = -0x1;
+pub const STATUS_OK: i32 = 0x0;
+pub const STATUS_ON_STORAGE: i32 = 0x2;
+pub const STATUS_UNLINKED: i32 = 0x4;
+pub const STATUS_FORWARDING: i32 = 0x5;
 
 
 const JSONFS_VERSION: i32 = 3;
@@ -55,21 +55,21 @@ const JSONFS_IDX_GID: i32 = 5;
 const JSONFS_IDX_TARGET: i32 = 6;
 const JSONFS_IDX_SHA256: i32 = 6;
 
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct QIDCounter {
     pub last_qidnumber: u64
 }
 
 type EventFn = fn() -> ();
 
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct Event {
     pub id: usize,
-    #[serde(skip)]
+    //#[serde(skip)]
     pub on_event: Option<EventFn>
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct UInt8Array {
     pub data: Box<[u8]>
 }
@@ -113,11 +113,11 @@ pub struct RecursiveListResult {
 
 
 
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct FS{
     pub inodes : Vec<INode>,
     pub root_id : usize,
-    #[serde(skip)]
+    //#[serde(skip)]
     pub events : Vec<Event>,
     pub qidcounter : QIDCounter,
     pub inodedata : HashMap<usize, UInt8Array>,
@@ -585,20 +585,29 @@ impl FS {
         dest_inode.mount_id = src_inode.mount_id;
         dest_inode.foreign_id = src_inode.foreign_id;
     }
-    
 
-    pub fn create_inode(&mut self) -> INode {
-        //console.log("CreateInode", Error().stack);
+    pub fn seconds_since_epoch() -> u64 {
+        let mut nanoseconds_time : u64 = 0;
+        let res = unsafe { clock_time_get(CLOCK_REALTIME, 1_000_000_000, (&mut nanoseconds_time) as *mut u64) };
+        return nanoseconds_time / 1_000_000_000;
+        
+        /*
         let start = SystemTime::now();
         let since_the_epoch = start
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards");
         let millis = since_the_epoch.as_millis();
         // Divide by 1000 and round
-        let now = (millis as f64 / 1000.0).round() as u64;
+        return (millis as f64 / 1000.0).round() as u64;
+        */
+    }
+    
+
+    pub fn create_inode(&mut self) -> INode {
+        //console.log("CreateInode", Error().stack);
         self.qidcounter.last_qidnumber += 1;
         let mut inode = INode::new(self.qidcounter.last_qidnumber);
-        
+        let now = FS::seconds_since_epoch();
         inode.mtime = now;
         inode.atime = now;
         inode.ctime = now;
@@ -2246,7 +2255,7 @@ impl FS {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct QID {
     // r# is needed because type is a keyword
     pub r#type: u8,
@@ -2255,7 +2264,7 @@ pub struct QID {
 }
 
 /** @constructor */
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct INode {
     pub direntries : HashMap<String, usize>,
     pub status : i32,
@@ -2422,7 +2431,7 @@ impl INode {
 */
 
 
-#[derive(Serialize, Deserialize, Debug)]
+//#[derive(Serialize, Deserialize, Debug)]
 pub struct FSMountInfo
 {
     pub fs : FS,
@@ -2463,7 +2472,8 @@ impl FSMountInfo {
 /**
  * @constructor
  */
-#[derive(Serialize, Deserialize, Debug, Clone)]
+//#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Clone)]
 pub struct FSLockRegion {
     pub r#type : i32,
     pub start : usize,

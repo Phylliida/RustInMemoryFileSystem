@@ -4,8 +4,10 @@
 // Implementation of the 9p filesystem device following the
 // 9P2000.L protocol ( https://code.google.com/p/diod/wiki/protocol )
 
-use crate::filesystem::{Number, FS, UInt8Array};
+use crate::filesystem::{FS, UInt8Array};
 use crate::marshall::*;
+
+pub type Number = u64;
 
 // Feature bit (bit position) for mount tag.
 pub const VIRTIO_9P_F_MOUNT_TAG : i32 = 0;

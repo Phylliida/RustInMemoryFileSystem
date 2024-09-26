@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use crate::filesystem::FS;
+use crate::wasi::{set_panic_hook, wasi_print_internal};
 
 // TODO: STATUS_ON_STORAGE STUFF (local filestorage? can't in pure wasm)
 // TODO: clone_me rename to clone once I'm done with porting (For Uint8Array)
@@ -12,24 +13,29 @@ mod marshall;
 mod v9p;
 mod wasi;
 
+
+
+
 #[no_mangle]
 pub extern "C" fn main() {
+    set_panic_hook();
+    wasi_print!("hi!");
     let mut fs = FS::new(None);
     let path = "bees.bepis";
     let beesptr = fs.create_text_file(path, fs.root_id, "applebeeeeeees");
-    println!("got file {}", beesptr);
+    wasi_print!("got file {}", beesptr);
     if let Some(result_text) = fs.read_text_file(path) {
-        println!("got text {}", result_text);
+        wasi_print!("got text {}", result_text);
     }
     else {
-        println!("got no text");
+        wasi_print!("got no text");
     }
 
     let directory = fs.create_directory("applebees wow", Some(fs.root_id));
     let beesptr2 = fs.create_text_file(path, directory, "applebeeeeeees2");
-    println!("got file 2 {} with full path {}", beesptr2, fs.get_full_path(directory));
+    wasi_print!("got file 2 {} with full path {}", beesptr2, fs.get_full_path(directory));
     if let Some(result_text) = fs.read_text_file("/applebees wow/bees.bepis") {
-        println!("got text 2 {}", result_text);
+        wasi_print!("got text 2 {}", result_text);
     }
     else {
         println!("got no text 2");

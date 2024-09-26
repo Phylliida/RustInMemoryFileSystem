@@ -9,20 +9,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-async-trait = "0.1.82"
 byteorder = "1.5.0"
-serde = {version = "^1.0.210", features = ["derive"]}
-
-[features]
-default = ["tokio_unstable"]
-tokio_unstable = []
-
-[target.wasm32-wasi-p1-threads]
-rustflags = ["-C", "target-feature=-crt-static"]
 
 [build]
-rustflags = ["--cfg", "tokio_unstable"]
-rustdocflags = ["--cfg", "tokio_unstable"] 
+rustflags = ["-C", "target-feature=-crt-static"]
 
 [toolchain]
 channel = "nightly"
