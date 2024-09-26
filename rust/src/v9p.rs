@@ -21,12 +21,13 @@ pub const SUCCESS : i32 = 0;
 
 pub const EPERM  : i32 = 1;       /* Operation not permitted */
 pub const ENOENT : i32 = 2;      /* No such file or directory */
+pub const EBADF : i32 = 8;       /* Bad file descriptor */
 pub const EEXIST : i32 = 17;      /* File exists */
 pub const EINVAL : i32 = 22;     /* Invalid argument */
 pub const EOPNOTSUPP : i32 = 95;  /* Operation is not supported */
 pub const ENOTEMPTY : i32 = 39;  /* Directory not empty */
+pub const ESPIPE : i32 = 70;   /* The specified file descriptor refers to a pipe or FIFO. */
 pub const EPROTO : i32 = 71;  /* Protocol error */
-
 
 pub const P9_SETATTR_MODE : Number = 0x00000001;
 pub const P9_SETATTR_UID : Number = 0x00000002;

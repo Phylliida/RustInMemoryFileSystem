@@ -7,11 +7,10 @@ use crate::filesystem::FS;
 // TODO: clone_me rename to clone once I'm done with porting (For Uint8Array)
 // TODO: Is it ok to clone FSLockRegion vec?
 
-// https://github.com/wasm-forge/ their file system seems good, doesn't support symlinks but otherwise
-// it came out at the same time as this :/
 mod filesystem;
 mod marshall;
 mod v9p;
+mod wasi;
 
 #[no_mangle]
 pub extern "C" fn main() {

@@ -1291,6 +1291,14 @@ impl FS {
         // Current scheme: Save all modified buffers into local inodedata.
         self.inodedata.insert(idx, buffer);
     }
+
+    pub fn is_index_valid(&self, idx : usize) -> bool {
+        if idx >= self.inodes.len() {
+            false
+        } else {
+            self.inodes[idx].status != STATUS_INVALID
+        }
+    }
     
     /**
      * @param {number} idx
