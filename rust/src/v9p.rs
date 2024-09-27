@@ -4,7 +4,10 @@
 // Implementation of the 9p filesystem device following the
 // 9P2000.L protocol ( https://code.google.com/p/diod/wiki/protocol )
 
+use std::collections::hash_map::Entry;
 use crate::filesystem::{FS, UInt8Array};
+use bitflags::bitflags;
+
 //use crate::marshall::*;
 //use crate::print_debug;
 //use crate::wasi::wasi_print_internal;
@@ -81,6 +84,154 @@ pub const STDIN_FD : i32 = 0;
 pub const STDOUT_FD : i32 = 1;
 pub const STDERR_FD : i32 = 2;
 
+
+// types modified from https://github.com/wasm-forge/ic-wasi-polyfill/blob/main/src/wasi_mock.rs
+#[repr(C)]
+pub struct Fdstat {
+    /// File type.
+    pub fs_filetype: FdFileType,
+    /// File descriptor flags.
+    pub fs_flags: FdFlags,
+    /// Rights that apply to this file descriptor.
+    pub fs_rights_base: FdRights,
+    /// Maximum set of rights that may be installed on new file descriptors that
+    /// are created through this file descriptor, e.g., through `path_open`.
+    pub fs_rights_inheriting: FdRights,
+}
+
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FdFileType {
+    /// The type of the file descriptor or file is unknown or is different from any of the other types specified.
+    Unknown = 0, 
+    /// The file descriptor or file refers to a block device inode.
+    BlockDevice = 1,
+    /// The file descriptor or file refers to a character device inode.
+    CharacterDevice = 2,
+    /// The file descriptor or file refers to a directory inode.
+    Directory = 3,
+    /// The file descriptor or file refers to a regular file inode.
+    RegularFile = 4,
+    /// The file descriptor or file refers to a datagram socket.
+    SocketDGram = 5,
+    /// The file descriptor or file refers to a byte-stream socket.
+    SocketStream = 6,
+    /// The file refers to a symbolic link inode.
+    SymbolicLink = 7
+}
+
+bitflags! {
+    /// Represents a set of flags.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct FdFlags: u16 {
+        /// Append mode: Data written to the file is always appended to the file's end.
+        const Append = 1<<0;
+        /// Write according to synchronized I/O data integrity completion. Only the data stored in the file is synchronized.
+        const DSync = 1<<1;
+        /// Non-blocking mode.
+        const NonBlock = 1<<2;
+        /// Synchronized read I/O operations.
+        const RSync = 1<<3;
+        /// Write according to synchronized I/O file integrity completion. In
+        /// addition to synchronizing the data stored in the file, the implementation
+        /// may also synchronously update the file's metadata.
+        const Sync = 1<<4;
+    }
+}
+
+
+bitflags! {
+    /// Represents a set of flags.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct FdRights : u64 {
+        /// The right to invoke `fd_datasync`.
+        /// If `path_open` is set, includes the right to invoke
+        /// `path_open` with `fdflags::dsync`.
+        const FdDataSync = 1 << 0;
+        /// The right to invoke `fd_read` and `sock_recv`.
+        /// If `rights::fd_seek` is set, includes the right to invoke `fd_pread`.
+        const FdRead = 1 << 1;
+        /// The right to invoke `fd_seek`. This flag implies `rights::fd_tell`.
+        const FdSeek = 1 << 2;
+        /// The right to invoke `fd_fdstat_set_flags`.
+        const FdFdstatSetFlags = 1 << 3;
+        /// The right to invoke `fd_sync`.
+        /// If `path_open` is set, includes the right to invoke
+        /// `path_open` with `fdflags::rsync` and `fdflags::dsync`.
+        const FdSync = 1 << 4;
+        /// The right to invoke `fd_seek` in such a way that the file offset
+        /// remains unaltered (i.e., `whence::cur` with offset zero), or to
+        /// invoke `fd_tell`.
+        const FdTell = 1 << 5;
+        /// The right to invoke `fd_write` and `sock_send`.
+        /// If `rights::fd_seek` is set, includes the right to invoke `fd_pwrite`.
+        const FdWrite = 1 << 6;
+        /// The right to invoke `fd_advise`.
+        const FdAdvise = 1 << 7;
+        /// The right to invoke `fd_allocate`.
+        const FdAllocate = 1 << 8;
+        /// The right to invoke `path_create_directory`.
+        const PathCreateDirectory = 1 << 9;
+        /// If `path_open` is set, the right to invoke `path_open` with `oflags::creat`.
+        const PathCreateFile = 1 << 10;
+        /// The right to invoke `path_link` with the file descriptor as the
+        /// source directory.
+        const PathLinkSource = 1 << 11;
+        /// The right to invoke `path_link` with the file descriptor as the
+        /// target directory.
+        const PathLinkTarget = 1 << 12;
+        /// The right to invoke `path_open`.
+        const PathOpen = 1 << 13;
+        /// The right to invoke `fd_readdir`.
+        const FdReaddir = 1 << 14;
+        /// The right to invoke `path_readlink`.
+        const PathReadlink = 1 << 15;
+        /// The right to invoke `path_rename` with the file descriptor as the source directory.
+        const PathRenameSource = 1 << 16;
+        /// The right to invoke `path_rename` with the file descriptor as the target directory.
+        const PathRenameTarget = 1 << 17;
+        /// The right to invoke `path_filestat_get`.
+        const PathFiestatGet = 1 << 18;
+        /// The right to change a file's size (there is no `path_filestat_set_size`).
+        /// If `path_open` is set, includes the right to invoke `path_open` with `oflags::trunc`.
+        const PathFilestatSetSize = 1 << 19;
+        /// The right to invoke `path_filestat_set_times`.
+        const PathFilestatSetTimes = 1 << 20;
+        /// The right to invoke `fd_filestat_get`.
+        const FdFilestatGet = 1 << 21;
+        /// The right to invoke `fd_filestat_set_size`.
+        const FdFilestatSetSize = 1 << 22;
+        /// The right to invoke `fd_filestat_set_times`.
+        const FdFilestatSetTimes = 1 << 23;
+        /// The right to invoke `path_symlink`.
+        const PathSymlink = 1 << 24;
+        /// The right to invoke `path_remove_directory`.
+        const PathRemoveDirectory = 1 << 25;
+        /// The right to invoke `path_unlink_file`.
+        const PathUnlinkFile = 1 << 26;
+        /// If `rights::fd_read` is set, includes the right to invoke `poll_oneoff` to subscribe to `eventtype::fd_read`.
+        /// If `rights::fd_write` is set, includes the right to invoke `poll_oneoff` to subscribe to `eventtype::fd_write`.
+        const PollFdReadwrite = 1 << 27;
+        /// The right to invoke `sock_shutdown`.
+        const SockShutdown = 1 << 28;
+        /// The right to invoke `sock_accept`.
+        const SockAccept = 1 << 29;
+    }
+}
+
+#[repr(C)]
+pub struct FdStat {
+    pub fs_filetype: FdFileType,
+    pub fs_flags: FdFlags,
+    pub fs_rights_base: FdRights,
+    pub fs_rights_inheriting: FdRights,
+}
+
+
+
+
+
 // TODO: bus
 
 pub struct Virtio9p {
@@ -93,18 +244,20 @@ pub struct Virtio9p {
     pub msize : usize,
     pub replybuffer : UInt8Array,
     pub replybuffersize : usize,
-    pub fids : HashMap<usize, FID>,
-    pub next_fid : usize
+    pub file_descriptors : HashMap<usize, FileDescriptor>,
+    pub next_fd : usize
 }
 const PIPE_MAX_FD : i32 = 2; 
 
 
 
 #[derive(Clone)]
-pub struct FID {
+pub struct FileDescriptor {
     pub inode_id : usize,
-    pub fid_type : u8,
-    pub fid : usize,
+    pub fd_flags : FdFlags,
+    pub fd_type : FdFileType,
+    pub fd_rights : FdRights,
+    pub fd : usize,
 }
 
 impl Virtio9p {
@@ -132,15 +285,15 @@ impl Virtio9p {
             msize: msize,
             replybuffer: UInt8Array::new(msize*2),
             replybuffersize: 0,
-            fids : HashMap::new(),
-            next_fid: (PIPE_MAX_FD+1) as usize,
+            file_descriptors : HashMap::new(),
+            next_fd: (PIPE_MAX_FD+1) as usize,
         };
 
         return result;
     }
 
-    pub fn get_iostream_fid(fid: i32) -> Option<Pipe> {
-        match fid {
+    pub fn get_pipe_fd(fd: i32) -> Option<Pipe> {
+        match fd {
             0 => Some(Pipe::Stdin),
             1 => Some(Pipe::Stdout),
             2 => Some(Pipe::Stderr),
@@ -148,8 +301,22 @@ impl Virtio9p {
         }
     }
 
-    pub fn get_file_fid(&self, fd: i32) -> Option<usize> {
-        if fd > PIPE_MAX_FD && self.fids.contains_key(&(fd as usize)) {
+    pub fn get_pipe_rights(pipe: Pipe) -> FdRights {
+        match pipe {
+            Pipe::Stdin => FdRights::FdRead 
+                | FdRights::FdFilestatGet 
+                | FdRights::PollFdReadwrite,
+            Pipe::Stdout => FdRights::FdWrite 
+                | FdRights::FdFilestatGet 
+                | FdRights::PollFdReadwrite,
+            Pipe::Stderr => FdRights::FdWrite 
+                | FdRights::FdFilestatGet 
+                | FdRights::PollFdReadwrite,
+        }
+    }
+
+    pub fn get_file_fd(&self, fd: i32) -> Option<usize> {
+        if fd > PIPE_MAX_FD && self.file_descriptors.contains_key(&(fd as usize)) {
             return Some(fd as usize)
         }
         else {
@@ -161,28 +328,50 @@ impl Virtio9p {
     // since it is not synchronised with renames done outside of 9p. Hard-links, linking and unlinking
     // operations also mean that having a single filename no longer makes sense.
     // Set TRACK_FILENAMES = true (in config.js) to sync dbg_name during 9p renames.
-    pub fn create_fid(&mut self, inode_id: usize, fid_type: u8) -> &FID {
-        let result = FID {
+    pub fn create_fd(&mut self, inode_id: usize, fd_flags : FdFlags, fd_type : FdFileType, fd_rights: FdRights) -> &FileDescriptor {       
+        let file_descriptor = FileDescriptor {
             inode_id: inode_id, 
-            fid_type: fid_type,
-            fid: self.next_fid
+            fd_flags : fd_flags,
+            fd_type: fd_type,
+            fd_rights: fd_rights,
+            fd: self.next_fd
         };
-        self.next_fid += 1;
-        let fid = result.fid;
-        self.fids.insert(fid, result);
-        return self.fids.get(&fid).unwrap();
+        self.next_fd += 1;
+        let fd = file_descriptor.fd;
+        match self.file_descriptors.entry(fd) {
+            Entry::Occupied(e) => &*e.into_mut(),
+            Entry::Vacant(e) => {
+                &*e.insert(file_descriptor)
+            }
+        }
     }
 
-    pub fn close_fid(&mut self, fid: usize) {
-        self.fids.remove(&fid);
-        //fid. // TODO: set closed state?
+    pub fn close_fd(&mut self, fd: usize) {
+        if let Some(mut file_descriptor) = self.file_descriptors.remove(&fd) {
+            // remove all rights
+            file_descriptor.fd_rights = FdRights::empty();
+        }
     }
 
-    pub fn allocate(&mut self, fid: usize, offset: i64, len: i64) {
-        let inode_id = self.fids[&fid].inode_id;
+    pub fn allocate(&mut self, fd: usize, offset: i64, len: i64) {
+        let inode_id = self.file_descriptors[&fd].inode_id;
         if self.fs.get_size(inode_id) < (offset + len) as usize {
             self.fs.change_size(inode_id, (offset+len) as usize);
         }
+    }
+
+    pub fn fd_stat(&self, fd: usize, stat: &mut FdStat) {
+        let file_descriptor = &self.file_descriptors[&fd];
+        stat.fs_filetype = 
+            if self.fs.is_directory(file_descriptor.inode_id) {
+                FdFileType::Directory
+            } else {
+                FdFileType::RegularFile
+            };
+        stat.fs_flags = file_descriptor.fd_flags;
+        stat.fs_rights_base = file_descriptor.fd_rights;
+        // TODO: Inheriting rights
+        stat.fs_rights_inheriting = FdRights::empty();
     }
 
     /*
@@ -273,7 +462,7 @@ impl Virtio9p {
         state[1] = this.configspace_taglen;
         state[2] = this.virtio;
         state[3] = this.VERSION;
-        state[4] = this.BLOCKSIZE;
+        state[4] = this. LOCKSIZE;
         state[5] = this.msize;
         state[6] = this.replybuffer;
         state[7] = this.replybuffersize;

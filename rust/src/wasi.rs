@@ -4,7 +4,6 @@ use std::panic;
 use std::backtrace::Backtrace;
 use crate::wasi_err;
 use crate::wasi::Pipe::Stderr;
-use crate::v9p::Virtio9p;
 
 //use libc::stat;
 
@@ -17,22 +16,10 @@ type Size = usize;
 type Errno = i32;
 type Rval = u32;
 
-type Filetype = u8;
-type FdFlags = u16;
-type Rights = u64;
-
 #[repr(C)]
 pub struct Ciovec {
     buf: *const u8,
     buf_len: Size,
-}
-
-#[repr(C)]
-pub struct FdStat {
-    pub fs_filetype: Filetype,
-    pub fs_flags: FdFlags,
-    pub fs_rights_base: Rights,
-    pub fs_rights_inheriting: Rights,
 }
 
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
@@ -176,9 +163,9 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 
     if fd < 0 {
         return EINVAL; // invalid file (negative) // posix_fadvise says we should return this if negative
     }
-    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         ESPIPE // invalid file (it's a pipe)
-    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fid(fd) {
+    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fd(fd) {
         // we don't currently use advise, just return success
         SUCCESS
     } else {
@@ -200,11 +187,11 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
     if offset < 0 || len <= 0 {
         return EINVAL;
     }
-    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ESPIPE; // invalid file (it's a pipe)
     }
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fid(fd) {
+    if let Some(fd_file) = fs.get_file_fd(fd) {
         fs.allocate(fd_file, offset, len);
         SUCCESS
     } else {
@@ -218,12 +205,12 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_close(fd: i32) -> i32 {
-    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
     };
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fid(fd) {
-        fs.close_fid(fd_file);
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.close_fd(fd_file);
         SUCCESS
     } else {
         EBADF // invalid file (file doesn't exist)
@@ -235,15 +222,20 @@ pub extern "C" fn fd_close(fd: i32) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_datasync(fd: i32) -> i32 {
-    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         SUCCESS // also does nothing for pipes
-    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fid(fd) {
+    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fd(fd) {
         // we don't currently use advise, just return success
         SUCCESS
     } else {
         EBADF // invalid file (file doesn't exist)
     }
 }
+
+
+
+
+
 
 // fd_fdstat_get
 // Get metadata of a file descriptor.
@@ -256,12 +248,22 @@ pub extern "C" fn fd_datasync(fd: i32) -> i32 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
-    if let Some(fd_pipe) = Virtio9p::get_iostream_fid(fd) {
-        return SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
-    };
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        unsafe {
+            let stat = &mut *buf_ptr;
+            stat.fs_filetype = FdFileType::CharacterDevice; // streams are character devices
+            stat.fs_flags = FdFlags::empty();
+            stat.fs_rights_base = Virtio9p::get_pipe_rights(fd_pipe);
+            stat.fs_rights_inheriting = FdRights::empty();
+        }
+        return SUCCESS;
+    }
+
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fid(fd) {
-        // todo: fill in FdStat
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        unsafe {
+            fs.fd_stat(fd_file, &mut *buf_ptr);
+        }
         SUCCESS
     } else {
         EBADF // invalid file (file doesn't exist)
