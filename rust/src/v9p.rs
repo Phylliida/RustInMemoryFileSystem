@@ -336,6 +336,25 @@ pub struct SrcBuf {
 pub type SrcIoVec<'a> = &'a [SrcBuf];
 pub type DstIoVec<'a> = &'a [DstBuf];
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct Prestat {
+    pub tag: u8,
+    pub u: PrestatU,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union PrestatU {
+    pub dir: PrestatDir,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct PrestatDir {
+    /// The length of the directory name for use with `fd_prestat_dir_name`.
+    pub pr_name_len: usize,
+}
 
 // TODO: bus
 

@@ -15,12 +15,6 @@ type Fd = u32;
 type Size = usize;
 type Rval = u32;
 
-#[repr(C)]
-pub struct Ciovec {
-    buf: *const u8,
-    buf_len: Size,
-}
-
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 extern "C" {
     // needed for stdin/stdout/stderr (mostly, for panic to be able to print)
@@ -391,26 +385,48 @@ pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: 
     }
 }
 
-/*
+/// Return a description of the given preopened file descriptor.
+// fd: The preopened file descriptor to query.
+// buf: A pointer to a Prestat structure where the metadata will be written.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut Prestat) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
+/// Return a description of the given preopened file descriptor.
+// fd: The preopened file descriptor to query.
+// path: A pointer to a buffer where the directory name will be written.
+// max_len: The maximum length of the buffer.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 
-/// Return a description of the given preopened file descriptor.
-#[no_mangle]
-#[inline(never)]
-pub extern "C" fn fd_prestat_get(arg0: i32, arg1: i32) -> i32;
-/// Return a description of the given preopened file descriptor.
-#[no_mangle]
-#[inline(never)]
-pub extern "C" fn fd_prestat_dir_name(arg0: i32, arg1: i32, arg2: i32) -> i32;
 /// Write to a file descriptor, without using and updating the file descriptor's offset.
 /// Note: This is similar to `pwritev` in POSIX.
+// fd: The file descriptor of the file to write to.
+// iovs: A pointer to an array of __wasi_ciovec_t structures describing the buffers from which data will be read.
+// iovs_len: The number of vectors (__wasi_ciovec_t) in the iovs array.
+// offset: The offset indicating the position at which the data will be written.
+// nwritten: A pointer to store the number of bytes written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_pwrite(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
+pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nwritten: *mut usize) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
+
 /// Read from a file descriptor.
 /// Note: This is similar to `readv` in POSIX.
+// fd: The file descriptor of the file to read from.
+// iovs: A pointer to an array of __wasi_iovec_t structures describing the buffers where the data will be stored.
+// iovs_len: The number of vectors (__wasi_iovec_t) in the iovs array.
+// nread: A pointer to store the number of bytes read.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_read(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
+pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Read directory entries from a directory.
 /// When successful, the contents of the output buffer consist of a sequence of
 /// directory entries. Each directory entry consists of a `dirent` object,
@@ -420,9 +436,17 @@ pub extern "C" fn fd_read(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
 /// truncating the last directory entry. This allows the caller to grow its
 /// read buffer size in case it's too small to fit a single large directory
 /// entry, or skip the oversized directory entry.
+// fd: The file descriptor of the directory to read from.
+// buf: A pointer to the buffer where directory entries will be stored.
+// buf_len: The length of the buffer in bytes.
+// cookie: The directory cookie indicating the position to start reading from.
+// bufused: A pointer to store the number of bytes stored in the buffer.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_readdir(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
+pub extern "C" fn fd_readdir(fd: i32, buf: *mut u8, buf_len: i32, cookie: i64, bufused: *mut usize) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
+
 /// Atomically replace a file descriptor by renumbering another file descriptor.
 /// Due to the strong focus on thread safety, this environment does not provide
 /// a mechanism to duplicate or renumber a file descriptor to an arbitrary
@@ -431,65 +455,125 @@ pub extern "C" fn fd_readdir(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i
 /// thread at the same time.
 /// This function provides a way to atomically renumber file descriptors, which
 /// would disappear if `dup2()` were to be removed entirely.
+// from: The file descriptor to copy.
+// to: The location to copy the file descriptor to.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_renumber(arg0: i32, arg1: i32) -> i32;
+pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
+
 /// Move the offset of a file descriptor.
 /// Note: This is similar to `lseek` in POSIX.
+// fd: The file descriptor to update.
+// offset: The number of bytes to adjust the offset by.
+// whence: The position that the offset is relative to.
+// newoffset: A WebAssembly memory pointer where the new offset will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_seek(arg0: i32, arg1: i64, arg2: i32, arg3: i32) -> i32;
+pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: i32, newoffset: *mut usize) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
+
 /// Synchronize the data and metadata of a file to disk.
 /// Note: This is similar to `fsync` in POSIX.
+// fd: The file descriptor to sync.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_sync(arg0: i32) -> i32;
+pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Return the current offset of a file descriptor.
 /// Note: This is similar to `lseek(fd, 0, SEEK_CUR)` in POSIX.
+// fd: The file descriptor to access.
+// offset: A wasm pointer to a Filesize where the offset will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_tell(arg0: i32, arg1: i32) -> i32;
+pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Write to a file descriptor.
 /// Note: This is similar to `writev` in POSIX.
+// fd: The file descriptor (opened with writing permission) to write to.
+// iovs: A wasm pointer to an array of __wasi_ciovec_t structures, each describing a buffer to write data from.
+// iovs_len: The length of the iovs array.
+// nwritten: A wasm pointer to an M::Offset value where the number of bytes written will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_write(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
+pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, len: i32, res: *mut usize) -> ErrorNumber{
+    ErrorNumber::SUCCESS
+}
+
 /// Create a directory.
 /// Note: This is similar to `mkdirat` in POSIX.
+// fd: The file descriptor representing the directory that the path is relative to.
+// path: A wasm pointer to a null-terminated string containing the path data.
+// path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_create_directory(arg0: i32, arg1: i32, arg2: i32) -> i32;
+pub extern "C" fn path_create_directory(fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Return the attributes of a file or directory.
 /// Note: This is similar to `stat` in POSIX.
+// fd: The file descriptor representing the directory that the path is relative to.
+// symlink_flags: Flags to control how the path is understood.
+// path: A wasm pointer to a null-terminated string containing the file path.
+// path_len: The length of the path string.
+// result: A wasm pointer to a Filestat object where the metadata will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_filestat_get(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32) -> i32;
+pub extern "C" fn path_filestat_get(parent_fd: i32,
+    simlink_flags: i32,
+    path: *const u8,
+    path_len: i32,
+    result: *mut FileStat) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Adjust the timestamps of a file or directory.
 /// Note: This is similar to `utimensat` in POSIX.
+// parent_fd: The file descriptor representing the directory that the path is relative to.
+// flags: Flags to control how the path is understood.
+// path: A wasm pointer to a null-terminated string containing the file path.
+// path_len: The length of the path string.
+// st_atim: The timestamp that the last accessed time attribute is set to.
+// st_mtim: The timestamp that the last modified time attribute is set to.
+// fst_flags: A bitmask controlling which attributes are set.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_filestat_set_times(
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-    arg4: i64,
-    arg5: i64,
-    arg6: i32,
-) -> i32;
+    parent_fd: i32,
+    flags: i32,
+    path: *const u8,
+    path_len: i32,
+    atim: Timestamp,
+    mtim: Timestamp,
+    fst_flags: FstFlags,
+) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Create a hard link.
 /// Note: This is similar to `linkat` in POSIX.
+// old_fd: The file descriptor representing the directory that the old_path is relative to.
+// old_flags: Flags to control how the old_path is understood.
+// old_path: A wasm pointer to a null-terminated string containing the old file path.
+// old_path_len: The length of the old_path string.
+// new_fd: The file descriptor representing the directory that the new_path is relative to.
+// new_path: A wasm pointer to a null-terminated string containing the new file path.
+// new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_link(
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-    arg4: i32,
-    arg5: i32,
-    arg6: i32,
-) -> i32;
+    old_fd: i32,
+    old_flags: i32,
+    old_path: *const u8,
+    old_path_len: i32,
+    new_fd: i32,
+    new_path: *const u8,
+    new_path_len: i32
+) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Open a file or directory.
 /// The returned file descriptor is not guaranteed to be the lowest-numbered
 /// file descriptor not currently open; it is randomized to prevent
@@ -497,55 +581,109 @@ pub extern "C" fn path_link(
 /// is error-prone in multi-threaded contexts. The returned file descriptor is
 /// guaranteed to be less than 2**31.
 /// Note: This is similar to `openat` in POSIX.
+// parent_fd: The file descriptor representing the directory that the file is located in.
+// parent_fd_flags: Flags specifying how the path will be resolved.
+// path: A wasm pointer to a null-terminated string containing the path of the file or directory to open.
+// path_len: The length of the path string.
+// o_flags: Flags specifying how the file will be opened.
+// fs_rights_base: The rights of the created file descriptor.
+// fs_rights_inheriting: The rights of file descriptors derived from the created file descriptor.
+// fs_flags: The flags of the file descriptor.
+// fd: A wasm pointer to a WasiFd variable where the new file descriptor will be stored.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_open(
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-    arg4: i32,
-    arg5: i64,
-    arg6: i64,
-    arg7: i32,
-    arg8: i32,
-) -> i32;
+    parent_fd: i32,
+    parent_fd_flags: i32,
+    path: *const u8,
+    path_len: i32,
+
+    oflags: i32,
+    fs_rights_base: FdRights,
+    fs_rights_inheriting: FdRights,
+
+    fdflags: FdFlags,
+    res: *mut i32
+) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Read the contents of a symbolic link.
 /// Note: This is similar to `readlinkat` in POSIX.
+// dir_fd: The file descriptor representing the base directory from which the symlink is understood.
+// path: A wasm pointer to a null-terminated string containing the path to the symlink.
+// path_len: The length of the path string.
+// buf: A wasm pointer to a buffer where the target path of the symlink will be written.
+// buf_len: The available space in the buffer pointed to by buf.
+// buf_used: A wasm pointer to a variable where the number of bytes written to the buffer will be stored.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_readlink(
-    arg0: i32,
-    arg1: i32,
-    arg2: i32,
-    arg3: i32,
-    arg4: i32,
-    arg5: i32,
-) -> i32;
+    dir_fd: i32,
+    path: *const u8,
+    path_len: i32,
+    buf: i32,
+    buf_len: i32,
+    buf_used: *mut i32,
+) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Remove a directory.
 /// Return `errno::notempty` if the directory is not empty.
 /// Note: This is similar to `unlinkat(fd, path, AT_REMOVEDIR)` in POSIX.
+// fd: The file descriptor representing the base directory from which the path is resolved.
+// path: A wasm pointer to a null-terminated string containing the path of the directory to remove.
+// path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_remove_directory(arg0: i32, arg1: i32, arg2: i32) -> i32;
+pub extern "C" fn path_remove_directory(fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Rename a file or directory.
 /// Note: This is similar to `renameat` in POSIX.
+// old_fd: The file descriptor representing the base directory for the source path.
+// old_path: A wasm pointer to a null-terminated string containing the source path of the file or directory to be renamed.
+// old_path_len: The length of the old_path string.
+// new_fd: The file descriptor representing the base directory for the target path.
+// new_path: A wasm pointer to a null-terminated string containing the target path with the new name for the file or directory.
+// new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_rename(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32, arg5: i32)
-    -> i32;
+pub extern "C" fn path_rename(old_fd: i32,
+    old_path: *const u8,
+    old_path_len: i32,
+    new_fd: i32,
+    new_path: *const u8,
+    new_path_len: i32)
+    -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Create a symbolic link.
 /// Note: This is similar to `symlinkat` in POSIX.
+// old_path: A wasm pointer to a null-terminated string containing the source path of the symlink.
+// old_path_len: The length of the old_path string.
+// fd: The file descriptor representing the base directory from which the paths are understood.
+// new_path: A wasm pointer to a null-terminated string containing the target path where the symlink will be created.
+// new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_symlink(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32) -> i32;
+pub extern "C" fn path_symlink(
+    old_path: *const u8,
+    old_path_len: i32,
+    fd: i32,
+    new_path: *const u8,
+    new_path_len: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
 /// Unlink a file.
 /// Return `errno::isdir` if the path refers to a directory.
 /// Note: This is similar to `unlinkat(fd, path, 0)` in POSIX.
+// dirfd: The file descriptor representing the base directory from which the path is understood.
+// path: A wasm pointer to a null-terminated string containing the path of the file to be unlinked.
+// path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub fn path_unlink_file(parent_fd: i32,
+pub extern "C" fn path_unlink_file(dirfd: i32,
     path: *const u8,
-    path_len: i32,
-);
-*/
+    path_len: i32) -> ErrorNumber {
+    ErrorNumber::SUCCESS
+}
