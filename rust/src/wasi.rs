@@ -173,6 +173,7 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 
     }
 }
 
+
 // fd_allocate
 // Allocate extra space for a file descriptor.
 // Description
@@ -296,7 +297,9 @@ pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> i32 {
 // fd: The file descriptor to apply the new rights to.
 // fs_rights_base: The base rights to apply to the file descriptor.
 // fs_rights_inheriting: The inheriting rights to apply to the file descriptor.
-pub fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> i32 {
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> i32 {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ESPIPE; // can't set rights on pipe
     }
@@ -309,9 +312,25 @@ pub fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inherit
     }
 
 }
-/*
+ 
 /// Return the attributes of an open file.
-pub fn fd_filestat_get(arg0: i32, arg1: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> i32 {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ESPIPE; // can't set rights on pipe
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        unsafe {
+            fs.get_file_stat(fd_file, &mut *stat)
+        }
+    } else {
+        EBADF // invalid file (file doesn't exist)
+    }
+}
+/*
 /// Adjust the size of an open file. If this increases the file's size, the extra bytes are filled with zeros.
 /// Note: This is similar to `ftruncate` in POSIX.
 pub fn fd_filestat_set_size(arg0: i32, arg1: i64) -> i32;

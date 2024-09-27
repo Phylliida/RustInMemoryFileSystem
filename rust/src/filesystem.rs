@@ -1022,6 +1022,7 @@ impl FS {
             });
 
         self.inodes[id].size = offset + count;
+        self.inodes[id].mtime = FS::seconds_since_epoch();
     }
     
     pub fn read(&self, inodeid : usize, offset : usize, count : usize) -> Option<&[u8]> {

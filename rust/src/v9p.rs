@@ -12,6 +12,7 @@ use bitflags::bitflags;
 //use crate::print_debug;
 //use crate::wasi::wasi_print_internal;
 use crate::wasi::*;
+use crate::filesystem::*;
 use std::collections::HashMap;
 
 pub type Number = u64;
@@ -146,6 +147,7 @@ bitflags! {
 bitflags! {
     /// Represents a set of flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[repr(C)]
     pub struct FdRights : u64 {
         /// The right to invoke `fd_datasync`.
         /// If `path_open` is set, includes the right to invoke
@@ -229,6 +231,37 @@ pub struct FdStat {
     pub fs_rights_base: FdRights,
     pub fs_rights_inheriting: FdRights,
 }
+
+
+
+
+pub type Device = u64;
+pub type LinkCount = u64;
+pub type FileSize = u64;
+pub type Timestamp = u64;
+
+pub const ROOT_DEVICE_ID : u64 = 0;
+
+#[repr(C)]
+pub struct FileStat {
+    /// Device ID of device containing the file.
+    pub dev: Device,
+    /// File serial number.
+    pub ino: usize,
+    /// File type.
+    pub filetype: FdFileType,
+    /// Number of hard links to the file.
+    pub nlink: LinkCount,
+    /// For regular files, the file size in bytes. For symbolic links, the length in bytes of the pathname contained in the symbolic link.
+    pub size: FileSize,
+    /// Last data access timestamp.
+    pub atim: Timestamp,
+    /// Last data modification timestamp.
+    pub mtim: Timestamp,
+    /// Last file status change timestamp.
+    pub ctim: Timestamp,
+}
+
 
 
 
@@ -363,14 +396,19 @@ impl Virtio9p {
         }
     }
 
+    fn get_inode_filetype(&self, inode_id: usize) -> FdFileType {
+        if self.fs.is_directory(inode_id) {
+            FdFileType::Directory
+        } else if self.fs.get_inode(inode_id).mode == S_IFLNK {
+            FdFileType::SymbolicLink
+        } else {
+            FdFileType::RegularFile
+        }
+    }
+
     pub fn fd_stat(&self, fd: usize, stat: &mut FdStat) {
         let file_descriptor = &self.file_descriptors[&fd];
-        stat.fs_filetype = 
-            if self.fs.is_directory(file_descriptor.inode_id) {
-                FdFileType::Directory
-            } else {
-                FdFileType::RegularFile
-            };
+        stat.fs_filetype = self.get_inode_filetype(file_descriptor.inode_id);
         stat.fs_flags = file_descriptor.flags;
         stat.fs_rights_base = file_descriptor.rights;
         stat.fs_rights_inheriting = file_descriptor.rights_inheriting;
@@ -394,6 +432,37 @@ impl Virtio9p {
             file_descriptor.rights_inheriting = rights_inheriting;
             SUCCESS
         }
+    }
+
+    pub fn get_file_stat(&self, fd: usize, filestat : &mut FileStat) -> i32{
+        let file_descriptor = &self.file_descriptors[&fd];
+        let inode_id = file_descriptor.inode_id;
+        let inode = &self.fs.get_inode(inode_id);
+        // Device ID of device containing the file.
+        filestat.dev = if let Some(dev_id) = inode.mount_id {
+                dev_id as u64
+            } else {
+                ROOT_DEVICE_ID
+            };
+        // File serial number.
+        filestat.ino = inode_id;
+        // File type.
+        filestat.filetype = self.get_inode_filetype(file_descriptor.inode_id);
+        // Number of hard links to the file.
+        filestat.nlink = inode.nlinks as u64;
+        // For regular files, the file size in bytes. For symbolic links, the length in bytes of the pathname contained in the symbolic link.
+        filestat.size = if filestat.filetype == FdFileType::SymbolicLink {
+                inode.symlink.as_bytes().len() as u64
+            } else {
+                inode.size as u64
+            };
+        // Last data access timestamp.
+        filestat.atim = inode.atime;
+        // Last data modification timestamp.
+        filestat.mtim = inode.mtime;
+        // Last file status change timestamp.
+        filestat.ctim = inode.ctime;
+        SUCCESS
     }
 
     /*
