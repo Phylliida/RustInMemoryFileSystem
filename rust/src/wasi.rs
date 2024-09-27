@@ -367,19 +367,20 @@ pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Ti
 // nread: A pointer to store the number of bytes read.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut i32) -> ErrorNumber {
+pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut usize) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
         // TODO: pread from pipe
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
         // from https://github.com/wasm-forge/ic-wasi-polyfill/blob/bd7bf38e665d0147ddee1ba428052456978a4028/src/lib.rs#L291C5-L292C80
         let dst_io_vec = iovs as *const DstBuf;
         unsafe {
             let dst_io_vec = std::slice::from_raw_parts(dst_io_vec, iovs_len as usize);
-            fs.read_vec(fd_file, dst_io_vec, offset as usize, &mut *nread)
+            // because we specify offset, the fd's offset won't be used or modified
+            fs.read_vec(fd_file, dst_io_vec, Some(offset as usize), &mut *nread)
         }
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -439,9 +440,16 @@ pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset:
         return ErrorNumber::ESPIPE;
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.do_something()
+        let writing_vec: &[SrcBuf] = unsafe {
+            let casted_vec = iovs as *const SrcBuf;
+            std::slice::from_raw_parts(casted_vec, iovs_len as usize)
+        };
+        unsafe {
+            // because we specify offset, the fd's offset won't be used or modified
+            fs.write_vec(fd_file, writing_vec, Some(offset as usize), &mut *nwritten)
+        }
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -460,9 +468,14 @@ pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *m
         return ErrorNumber::ESPIPE;
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.do_something()
+        // from https://github.com/wasm-forge/ic-wasi-polyfill/blob/bd7bf38e665d0147ddee1ba428052456978a4028/src/lib.rs#L291C5-L292C80
+        let dst_io_vec = iovs as *const DstBuf;
+        unsafe {
+            let dst_io_vec = std::slice::from_raw_parts(dst_io_vec, iovs_len as usize);
+            fs.read_vec(fd_file, dst_io_vec, None, &mut *nread)
+        }        
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -537,14 +550,16 @@ pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
 // newoffset: A WebAssembly memory pointer where the new offset will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: i32, newoffset: *mut usize) -> ErrorNumber {
+pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *mut usize) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.do_something()
+        unsafe {
+            fs.seek(fd_file, offset, whence, &mut *newoffset)
+        }
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -580,7 +595,9 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
 
     let fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.do_something()
+        unsafe {
+            fs.tell(fd_file, &mut *offset)
+        }
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -593,14 +610,21 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
 // nwritten: A wasm pointer to an M::Offset value where the number of bytes written will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, len: i32, res: *mut usize) -> ErrorNumber{
+pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber{
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.do_something()
+        let writing_vec: &[SrcBuf] = unsafe {
+            let casted_vec = iovs as *const SrcBuf;
+            std::slice::from_raw_parts(casted_vec, iovs_len as usize)
+        };
+        unsafe {
+            // because we specify offset, the fd's offset won't be used or modified
+            fs.write_vec(fd_file, writing_vec, None, &mut *nwritten)
+        }
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }

@@ -351,6 +351,18 @@ pub struct PreStat {
     pub directory_path_len: usize
 }
 
+#[repr(u32)]
+#[derive(Copy, Clone)]
+pub enum SeekWhence {
+    /// The offset is set to the given value.
+    Set = 0,
+    /// The offset is set relative to the current position.
+    Current = 1,
+    /// The offset is set relative to the end of the file.
+    End = 2,
+}
+
+
 // TODO: bus
 
 pub struct Virtio9p {
@@ -370,13 +382,13 @@ const PIPE_MAX_FD : i32 = 2;
 
 
 
-#[derive(Clone)]
 pub struct FileDescriptor {
     pub inode_id : usize,
     pub flags : FdFlags,
     pub rights : FdRights,
     pub rights_inheriting : FdRights,
     pub fd : usize,
+    pub offset : usize,
 }
 
 impl Virtio9p {
@@ -453,6 +465,7 @@ impl Virtio9p {
             flags : flags,
             rights: rights,
             rights_inheriting: rights_inheriting,
+            offset: 0,
             fd: self.next_fd
         };
         self.next_fd += 1;
@@ -588,10 +601,18 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn read_vec(&self, fd: usize, dst: DstIoVec, offset: usize, n_read: &mut i32) -> ErrorNumber {
+    pub fn read_vec(&mut self, fd: usize, dst: DstIoVec, offset: Option<usize>, n_read: &mut usize) -> ErrorNumber {
         *n_read = 0;
-        let mut cur_offset = offset;
+        let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = self.file_descriptors[&fd].inode_id;
+
+        // use specified offset, otherwise file descriptor offset
+        let mut cur_offset = 
+            if let Some(offset_val) = offset {
+                offset_val
+            } else {
+                file_descriptor.offset
+            };
 
         for buf in dst {
             let n_reading = buf.len;
@@ -603,7 +624,39 @@ impl Virtio9p {
                 return ErrorNumber::EINVAL; // failed to read, maybe out of bounds
             }
             cur_offset += n_reading;
-            *n_read += n_reading as i32;
+            *n_read += n_reading;
+        }
+
+        // if not specified offset, update file descriptor's offset
+        if offset.is_none() {
+            self.file_descriptors.get_mut(&fd).unwrap().offset = cur_offset;
+        }
+
+        ErrorNumber::SUCCESS
+    }
+
+    pub fn write_vec(&mut self, fd: usize, src: &[SrcBuf], offset: Option<usize>, n_written: &mut usize) -> ErrorNumber {
+        *n_written = 0;
+        let file_descriptor = &self.file_descriptors[&fd];
+        let inode_id = file_descriptor.inode_id;
+        // if don't specify offset, use offset in file_descriptor
+        let mut cur_offset = 
+            if let Some(offset_val) = offset {
+                offset_val
+            } else {
+                file_descriptor.offset
+            };
+
+        for buf in src {
+            let n_writing = buf.len;
+            let buf_reading_from = unsafe { std::slice::from_raw_parts(buf.buf, n_writing) };
+            self.fs.write_arr(inode_id, cur_offset, n_writing, Some(buf_reading_from));
+            cur_offset += n_writing;
+            *n_written += n_writing;
+        }
+        // if didn't specify offset, update file descriptor offset
+        if offset.is_none() {
+            self.file_descriptors.get_mut(&fd).unwrap().offset = cur_offset;
         }
         ErrorNumber::SUCCESS
     }
@@ -635,6 +688,48 @@ impl Virtio9p {
 
 
         ErrorNumber::SUCCESS
+    }
+
+    pub fn tell(&self, fd : usize, offset : &mut usize) -> ErrorNumber {
+        let file_descriptor = &self.file_descriptors[&fd];
+        let inode_id = file_descriptor.inode_id;
+
+        if self.get_inode_filetype(inode_id) != FdFileType::RegularFile {
+            return ErrorNumber::EINVAL; // only valid for files
+        }
+        *offset = file_descriptor.offset;
+        ErrorNumber::SUCCESS
+    }
+
+    pub fn seek(&mut self, fd: usize, offset: i64, whence: SeekWhence, newoffset: &mut usize) -> ErrorNumber {
+        let file_descriptor = &self.file_descriptors[&fd];
+        let inode_id = file_descriptor.inode_id;
+        let inode = self.fs.get_inode(inode_id);
+
+        if self.get_inode_filetype(inode_id) != FdFileType::RegularFile {
+            return ErrorNumber::EINVAL; // only valid for files
+        }
+
+        // we need to use i64 to allow for negative numbers
+        let new_offset : i64 = match whence {
+            // The offset is set to the given value.
+            SeekWhence::Set => offset,
+            // The offset is set relative to the current position.
+            SeekWhence::Current => (file_descriptor.offset as i64) + offset,
+            // The offset is set relative to the end of the file.
+            SeekWhence::End => (inode.size as i64) - offset - 1 // -1 because for example, a file of size 1 and offset 0 should be at 0 
+        };
+
+        // out of bounds check
+        if new_offset < 0 || new_offset >= inode.size as i64 {
+            ErrorNumber::EINVAL
+        }
+        else {
+            // it's alright, update it
+            self.file_descriptors.get_mut(&fd).unwrap().offset = new_offset as usize;
+            *newoffset = new_offset as usize;
+            ErrorNumber::SUCCESS
+        }
     }
 
     pub fn do_something(&self) -> ErrorNumber {
