@@ -299,6 +299,44 @@ bitflags! {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Ciovec {
+    /// The address of the buffer to be written.
+    pub buf: *const u8,
+    /// The length of the buffer to be written.
+    pub buf_len: usize,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Iovec {
+    /// The address of the buffer to be filled.
+    pub buf: *mut u8,
+    /// The length of the buffer to be filled.
+    pub buf_len: usize,
+}
+
+pub type IovecArray<'a> = &'a [Iovec];
+pub type CiovecArray<'a> = &'a [Ciovec];
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct DstBuf {
+    pub buf: *mut u8,
+    pub len: usize,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SrcBuf {
+    pub buf: *const u8,
+    pub len: usize,
+}
+pub type SrcIoVec<'a> = &'a [SrcBuf];
+pub type DstIoVec<'a> = &'a [DstBuf];
+
+
 // TODO: bus
 
 pub struct Virtio9p {
@@ -535,6 +573,27 @@ impl Virtio9p {
         
         ErrorNumber::SUCCESS
     }
+
+    pub fn read_vec(&self, fd: usize, dst: DstIoVec, offset: usize, n_read: &mut i32) -> ErrorNumber {
+        *n_read = 0;
+        let mut cur_offset = offset;
+        let inode_id = self.file_descriptors[&fd].inode_id;
+
+        for buf in dst {
+            let n_reading = buf.len;
+            let buf_writing_to = unsafe { std::slice::from_raw_parts_mut(buf.buf, n_reading) };
+            if let Some(data) = self.fs.read(inode_id, cur_offset, n_reading) {
+                buf_writing_to.copy_from_slice(data);
+            }
+            else {
+                return ErrorNumber::EINVAL; // failed to read, maybe out of bounds
+            }
+            cur_offset += n_reading;
+            *n_read += n_reading as i32;
+        }
+        ErrorNumber::SUCCESS
+    }
+
     /*
         /** @type {VirtIO} */
         this.virtio = new VirtIO(cpu,

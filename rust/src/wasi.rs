@@ -362,13 +362,37 @@ pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Ti
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
-/*
+
 
 /// Read from a file descriptor, without using and updating the file descriptor's offset.
 /// Note: This is similar to `preadv` in POSIX.
+// fd: The file descriptor of the file to read from.
+// iovs: A pointer to an array of __wasi_iovec_t structures describing the buffers where the data will be stored.
+// iovs_len: The number of vectors (__wasi_iovec_t) in the iovs array.
+// offset: The file cursor indicating the starting position from which data will be read.
+// nread: A pointer to store the number of bytes read.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_pread(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
+pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut i32) -> ErrorNumber {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        // TODO: pread from pipe
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        // from https://github.com/wasm-forge/ic-wasi-polyfill/blob/bd7bf38e665d0147ddee1ba428052456978a4028/src/lib.rs#L291C5-L292C80
+        let dst_io_vec = iovs as *const DstBuf;
+        unsafe {
+            let dst_io_vec = std::slice::from_raw_parts(dst_io_vec, iovs_len as usize);
+            fs.read_vec(fd_file, dst_io_vec, offset as usize, &mut *nread)
+        }
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
+}
+
+/*
+
 /// Return a description of the given preopened file descriptor.
 #[no_mangle]
 #[inline(never)]
