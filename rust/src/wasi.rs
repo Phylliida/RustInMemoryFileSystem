@@ -13,7 +13,6 @@ pub type Timestamp = u64;
 // from https://www.jakubkonka.com/2020/04/28/rust-wasi-from-scratch.html
 type Fd = u32;
 type Size = usize;
-type Errno = i32;
 type Rval = u32;
 
 #[repr(C)]
@@ -25,9 +24,9 @@ pub struct Ciovec {
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 extern "C" {
     // needed for stdin/stdout/stderr (mostly, for panic to be able to print)
-    pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> Errno;
+    pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> ErrorNumber;
     // needed to set file times
-    pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> i32;
+    pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> ErrorNumber;
 }
 
 
@@ -89,7 +88,7 @@ macro_rules! wasi_err {
     }}
 }
 
-pub fn wasi_print_internal(pipe : Pipe, msg: &String) -> Errno {
+pub fn wasi_print_internal(pipe : Pipe, msg: &String) -> ErrorNumber {
     let str_bytes = &*msg.as_bytes();
     let ciovec = Ciovec {
         buf: str_bytes.as_ptr(),
@@ -159,17 +158,17 @@ pub enum Pipe {
 // advice: The advice to be given to the operating system
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 {
+pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> ErrorNumber {
     if fd < 0 {
-        return EINVAL; // invalid file (negative) // posix_fadvise says we should return this if negative
+        return ErrorNumber::EINVAL; // invalid file (negative) // posix_fadvise says we should return this if negative
     }
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        ESPIPE // invalid file (it's a pipe)
+        ErrorNumber::ESPIPE // invalid file (it's a pipe)
     } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fd(fd) {
         // we don't currently use advise, just return success
-        SUCCESS
+        ErrorNumber::SUCCESS
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -184,19 +183,19 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 
 // len: The length from the offset marking the end of the allocation.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
+pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
     if offset < 0 || len <= 0 {
-        return EINVAL;
+        return ErrorNumber::EINVAL;
     }
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ESPIPE; // invalid file (it's a pipe)
+        return ErrorNumber::ESPIPE; // invalid file (it's a pipe)
     }
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
         fs.allocate(fd_file, offset, len);
-        SUCCESS
+        ErrorNumber::SUCCESS
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -205,16 +204,16 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> i32 {
 /// Note: This is similar to `close` in POSIX.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_close(fd: i32) -> i32 {
+pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
+        return ErrorNumber::SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
     };
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
         fs.close_fd(fd_file);
-        SUCCESS
+        ErrorNumber::SUCCESS
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -222,20 +221,16 @@ pub extern "C" fn fd_close(fd: i32) -> i32 {
 /// Note: This is similar to `fdatasync` in POSIX.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_datasync(fd: i32) -> i32 {
+pub extern "C" fn fd_datasync(fd: i32) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        SUCCESS // also does nothing for pipes
+        ErrorNumber::SUCCESS // also does nothing for pipes
     } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fd(fd) {
         // we don't currently use advise, just return success
-        SUCCESS
+        ErrorNumber::SUCCESS
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
-
-
-
-
 
 
 // fd_fdstat_get
@@ -248,7 +243,7 @@ pub extern "C" fn fd_datasync(fd: i32) -> i32 {
 // buf_ptr: A WebAssembly pointer to a memory location where the metadata will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
+pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         unsafe {
             let stat = &mut *buf_ptr;
@@ -257,7 +252,7 @@ pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
             stat.fs_rights_base = Virtio9p::get_pipe_rights(fd_pipe);
             stat.fs_rights_inheriting = FdRights::empty();
         }
-        return SUCCESS;
+        return ErrorNumber::SUCCESS;
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
@@ -265,9 +260,9 @@ pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
         unsafe {
             fs.fd_stat(fd_file, &mut *buf_ptr);
         }
-        SUCCESS
+        ErrorNumber::SUCCESS
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -279,16 +274,16 @@ pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
 // flags: The flags to apply to the file descriptor.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> i32 {
+pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ESPIPE; // can't set flags on pipe
+        return ErrorNumber::ESPIPE; // can't set flags on pipe
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
         fs.fd_stat_set_flags(fd_file, flags)
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
 
@@ -299,26 +294,25 @@ pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> i32 {
 // fs_rights_inheriting: The inheriting rights to apply to the file descriptor.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> i32 {
+pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ESPIPE; // can't set rights on pipe
+        return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_file_fd(fd) {
         fs.fd_stat_set_rights(fd_file, fs_rights_base, fs_rights_inheriting)
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
-
 }
  
 /// Return the attributes of an open file.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> i32 {
+pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ESPIPE; // can't set rights on pipe
+        return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
@@ -327,29 +321,72 @@ pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> i32 {
             fs.get_file_stat(fd_file, &mut *stat)
         }
     } else {
-        EBADF // invalid file (file doesn't exist)
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
+}
+
+/// Adjust the size of an open file. If this increases the file's size, the extra bytes are filled with zeros.
+/// Note: This is similar to `ftruncate` in POSIX.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE; // can't set rights on pipe
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.file_stat_set_size(fd_file, size as usize)
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
+
+}
+/// Adjust the timestamps of an open file or directory.
+/// Note: This is similar to `futimens` in POSIX.
+// fd: The file descriptor of the file to set the timestamp metadata.
+// st_atim: The last accessed time to set.
+// st_mtim: The last modified time to set.
+// fst_flags: A bit-vector that controls which times to set.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE; // can't set time on pipe
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.file_stat_set_times(fd_file, st_atim, st_mtim, fst_flags)
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
 /*
-/// Adjust the size of an open file. If this increases the file's size, the extra bytes are filled with zeros.
-/// Note: This is similar to `ftruncate` in POSIX.
-pub fn fd_filestat_set_size(arg0: i32, arg1: i64) -> i32;
-/// Adjust the timestamps of an open file or directory.
-/// Note: This is similar to `futimens` in POSIX.
-pub fn fd_filestat_set_times(arg0: i32, arg1: i64, arg2: i64, arg3: i32) -> i32;
+
 /// Read from a file descriptor, without using and updating the file descriptor's offset.
 /// Note: This is similar to `preadv` in POSIX.
-pub fn fd_pread(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_pread(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
 /// Return a description of the given preopened file descriptor.
-pub fn fd_prestat_get(arg0: i32, arg1: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_prestat_get(arg0: i32, arg1: i32) -> i32;
 /// Return a description of the given preopened file descriptor.
-pub fn fd_prestat_dir_name(arg0: i32, arg1: i32, arg2: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_prestat_dir_name(arg0: i32, arg1: i32, arg2: i32) -> i32;
 /// Write to a file descriptor, without using and updating the file descriptor's offset.
 /// Note: This is similar to `pwritev` in POSIX.
-pub fn fd_pwrite(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_pwrite(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
 /// Read from a file descriptor.
 /// Note: This is similar to `readv` in POSIX.
-pub fn fd_read(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_read(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
 /// Read directory entries from a directory.
 /// When successful, the contents of the output buffer consist of a sequence of
 /// directory entries. Each directory entry consists of a `dirent` object,
@@ -359,7 +396,9 @@ pub fn fd_read(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
 /// truncating the last directory entry. This allows the caller to grow its
 /// read buffer size in case it's too small to fit a single large directory
 /// entry, or skip the oversized directory entry.
-pub fn fd_readdir(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_readdir(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
 /// Atomically replace a file descriptor by renumbering another file descriptor.
 /// Due to the strong focus on thread safety, this environment does not provide
 /// a mechanism to duplicate or renumber a file descriptor to an arbitrary
@@ -368,28 +407,44 @@ pub fn fd_readdir(arg0: i32, arg1: i32, arg2: i32, arg3: i64, arg4: i32) -> i32;
 /// thread at the same time.
 /// This function provides a way to atomically renumber file descriptors, which
 /// would disappear if `dup2()` were to be removed entirely.
-pub fn fd_renumber(arg0: i32, arg1: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_renumber(arg0: i32, arg1: i32) -> i32;
 /// Move the offset of a file descriptor.
 /// Note: This is similar to `lseek` in POSIX.
-pub fn fd_seek(arg0: i32, arg1: i64, arg2: i32, arg3: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_seek(arg0: i32, arg1: i64, arg2: i32, arg3: i32) -> i32;
 /// Synchronize the data and metadata of a file to disk.
 /// Note: This is similar to `fsync` in POSIX.
-pub fn fd_sync(arg0: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_sync(arg0: i32) -> i32;
 /// Return the current offset of a file descriptor.
 /// Note: This is similar to `lseek(fd, 0, SEEK_CUR)` in POSIX.
-pub fn fd_tell(arg0: i32, arg1: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_tell(arg0: i32, arg1: i32) -> i32;
 /// Write to a file descriptor.
 /// Note: This is similar to `writev` in POSIX.
-pub fn fd_write(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_write(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32;
 /// Create a directory.
 /// Note: This is similar to `mkdirat` in POSIX.
-pub fn path_create_directory(arg0: i32, arg1: i32, arg2: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_create_directory(arg0: i32, arg1: i32, arg2: i32) -> i32;
 /// Return the attributes of a file or directory.
 /// Note: This is similar to `stat` in POSIX.
-pub fn path_filestat_get(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_filestat_get(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32) -> i32;
 /// Adjust the timestamps of a file or directory.
 /// Note: This is similar to `utimensat` in POSIX.
-pub fn path_filestat_set_times(
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_filestat_set_times(
     arg0: i32,
     arg1: i32,
     arg2: i32,
@@ -400,7 +455,9 @@ pub fn path_filestat_set_times(
 ) -> i32;
 /// Create a hard link.
 /// Note: This is similar to `linkat` in POSIX.
-pub fn path_link(
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_link(
     arg0: i32,
     arg1: i32,
     arg2: i32,
@@ -416,7 +473,9 @@ pub fn path_link(
 /// is error-prone in multi-threaded contexts. The returned file descriptor is
 /// guaranteed to be less than 2**31.
 /// Note: This is similar to `openat` in POSIX.
-pub fn path_open(
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_open(
     arg0: i32,
     arg1: i32,
     arg2: i32,
@@ -429,7 +488,9 @@ pub fn path_open(
 ) -> i32;
 /// Read the contents of a symbolic link.
 /// Note: This is similar to `readlinkat` in POSIX.
-pub fn path_readlink(
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_readlink(
     arg0: i32,
     arg1: i32,
     arg2: i32,
@@ -440,14 +501,20 @@ pub fn path_readlink(
 /// Remove a directory.
 /// Return `errno::notempty` if the directory is not empty.
 /// Note: This is similar to `unlinkat(fd, path, AT_REMOVEDIR)` in POSIX.
-pub fn path_remove_directory(arg0: i32, arg1: i32, arg2: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_remove_directory(arg0: i32, arg1: i32, arg2: i32) -> i32;
 /// Rename a file or directory.
 /// Note: This is similar to `renameat` in POSIX.
-pub fn path_rename(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32, arg5: i32)
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_rename(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32, arg5: i32)
     -> i32;
 /// Create a symbolic link.
 /// Note: This is similar to `symlinkat` in POSIX.
-pub fn path_symlink(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32) -> i32;
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn path_symlink(arg0: i32, arg1: i32, arg2: i32, arg3: i32, arg4: i32) -> i32;
 /// Unlink a file.
 /// Return `errno::isdir` if the path refers to a directory.
 /// Note: This is similar to `unlinkat(fd, path, 0)` in POSIX.

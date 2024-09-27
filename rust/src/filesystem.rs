@@ -801,15 +801,15 @@ impl FS {
     /**
      * @return {!Promise<number>} 0 if success, or errno if failured.
      */
-    pub fn rename(&mut self, olddirid: usize, oldname: &str, newdirid: usize, newname: &str) -> i32 {
+    pub fn rename(&mut self, olddirid: usize, oldname: &str, newdirid: usize, newname: &str) -> ErrorNumber {
         // message.Debug("Rename " + oldname + " to " + newname);
         if (olddirid == newdirid) && (oldname == newname) {
-            return SUCCESS;
+            return ErrorNumber::SUCCESS;
         }
         let oldid = self.search(olddirid, oldname);
         if oldid.is_none()
         {
-            return ENOENT;
+            return ErrorNumber::ENOENT;
         }
 
         // For event notification near end of method.
@@ -818,7 +818,7 @@ impl FS {
         let newid = self.search(newdirid, newname);
         if newid.is_some() {
             let ret = self.unlink(newdirid, newname);
-            if ret != SUCCESS {
+            if ret != ErrorNumber::SUCCESS {
                 return ret;
             }
         }
@@ -855,7 +855,7 @@ impl FS {
             let ret = self.follow_fs_by_id_mut(olddir_mount_id.unwrap())
                 .rename(olddir_foreign_id.unwrap(), oldname, newdir_foreign_id.unwrap(), newname);
 
-            if ret != SUCCESS {
+            if ret != ErrorNumber::SUCCESS {
                 return ret;
             }
         }
@@ -864,13 +864,13 @@ impl FS {
             // The actual inode is a root of some descendant filesystem.
             // Moving mountpoint across fs not supported - needs to update all corresponding forwarders.
             print_debug!("XXX: Attempted to move mountpoint ({}) - skipped", oldname);
-            return EPERM;
+            return ErrorNumber::EPERM;
         }
         else if !self.is_directory(idx) && self.get_inode(idx).nlinks > 1
         {
             // Move hardlinked inode vertically in mount tree.
             print_debug!("XXX: Attempted to move hardlinked file ({}) across filesystems - skipped", oldname);
-            return EPERM;
+            return ErrorNumber::EPERM;
         }
         else
         {
@@ -951,7 +951,7 @@ impl FS {
                 for child_filename in self.get_children(diverted_old_idx)
                 {
                     let ret = self.rename(diverted_old_idx, &child_filename, idx, &child_filename);
-                    if ret != SUCCESS {
+                    if ret != ErrorNumber::SUCCESS {
                         return ret;
                     }
                 }
@@ -960,7 +960,7 @@ impl FS {
             // Perform destructive changes only after migration succeeded.
             self.delete_data(diverted_old_idx);
             let ret = self.unlink(olddirid, oldname);
-            if ret != SUCCESS {
+            if ret != ErrorNumber::SUCCESS {
                 return ret;
             }
         }
@@ -972,7 +972,7 @@ impl FS {
             }
         );
 
-        return SUCCESS;
+        return ErrorNumber::SUCCESS;
     }
 
     pub fn write(&mut self, id : usize, offset : usize, count : usize, buffer : Option<&UInt8Array>) {
@@ -1165,10 +1165,10 @@ impl FS {
      * @param {string} name
      * @return {number} 0 if success, or errno if failured.
      */
-    pub fn link(&mut self, parentid : usize, targetid : usize, name : &str) -> i32 {
+    pub fn link(&mut self, parentid : usize, targetid : usize, name : &str) -> ErrorNumber {
         if self.is_directory(targetid)
         {
-            return EPERM;
+            return ErrorNumber::EPERM;
         }
 
         let parent_inode = &self.inodes[parentid];
@@ -1179,7 +1179,7 @@ impl FS {
             if !FS::is_forwarder(inode) || inode.mount_id.unwrap() != parent_inode.mount_id.unwrap()
             {
                 print_debug!("XXX: Attempted to hardlink a file into a child filesystem - skipped");
-                return EPERM;
+                return ErrorNumber::EPERM;
             }
             let parent_inode_mount_id = parent_inode.mount_id.unwrap();
             let parent_inode_foreign_id = parent_inode.foreign_id.unwrap();
@@ -1191,23 +1191,23 @@ impl FS {
         if FS::is_forwarder(inode)
         {
             print_debug!("XXX: Attempted to hardlink file across filesystems - skipped");
-            return EPERM;
+            return ErrorNumber::EPERM;
         }
 
         self.link_under_dir(parentid, targetid, name);
-        return SUCCESS;
+        return ErrorNumber::SUCCESS;
     }
 
-    pub fn unlink(&mut self, parentid : usize, name : &str) -> i32 {
+    pub fn unlink(&mut self, parentid : usize, name : &str) -> ErrorNumber {
         if name == "." || name == ".."
         {
             // Also guarantees that root cannot be deleted.
-            return EPERM;
+            return ErrorNumber::EPERM;
         }
         let idx_cond = self.search(parentid, name);
 
         if idx_cond.is_none() {
-            return ENOENT;
+            return ErrorNumber::ENOENT;
         }
 
         let idx = idx_cond.unwrap();
@@ -1231,7 +1231,7 @@ impl FS {
 
         if self.is_directory(idx) && !self.is_empty(idx)
         {
-            return ENOTEMPTY;
+            return ErrorNumber::ENOTEMPTY;
         }
 
         self.unlink_from_dir(parentid, name);
@@ -1243,7 +1243,7 @@ impl FS {
             inode_mut.status = STATUS_UNLINKED;
             self.notify_listeners(idx, "delete");
         }
-        return SUCCESS;
+        return ErrorNumber::SUCCESS;
     }
     
     pub fn delete_data(&mut self, idx : usize) {
@@ -1494,7 +1494,7 @@ impl FS {
         for i in (0..to_delete.len()).rev()
         {
             let ret = self.unlink(to_delete[i].parentid, &to_delete[i].name);
-            debug_assert!(ret == SUCCESS, "Filesystem RecursiveDelete failed at parent={}, name='{}' with error code: {}", to_delete[i].parentid, to_delete[i].name, -ret);
+            debug_assert!(ret == ErrorNumber::SUCCESS, "Filesystem RecursiveDelete failed at parent={}, name='{}' with error code: {:?}", to_delete[i].parentid, to_delete[i].name, ret);
         }
     }
 
@@ -1506,12 +1506,12 @@ impl FS {
 
         if (self.inodes[ids.id.unwrap()].mode & S_IFMT) == S_IFREG{
             let ret = self.unlink(ids.parentid.unwrap(), &ids.name);
-            debug_assert!(ret == SUCCESS, "Filesystem DeleteNode failed with error code: {}", -ret);
+            debug_assert!(ret == ErrorNumber::SUCCESS, "Filesystem DeleteNode failed with error code: {:?}", ret);
         }
         else if (self.inodes[ids.id.unwrap()].mode & S_IFMT) == S_IFDIR {
             self.recursive_delete(path);
             let ret = self.unlink(ids.parentid.unwrap(), &ids.name);
-            debug_assert!(ret == SUCCESS, "Filesystem DeleteNode failed with error code: {}", -ret);
+            debug_assert!(ret == ErrorNumber::SUCCESS, "Filesystem DeleteNode failed with error code: {:?}", ret);
         }
     }
     
@@ -1924,7 +1924,7 @@ impl FS {
      * @param {FS} fs
      * @return {number} inode id of mount point if successful, or -errno if mounting failed.
      */
-    pub fn mount(&mut self, path : &str, fs : FS) -> (Option<usize>, i32)  {
+    pub fn mount(&mut self, path : &str, fs : FS) -> (Option<usize>, ErrorNumber)  {
         debug_assert!(fs.qidcounter.last_qidnumber == self.qidcounter.last_qidnumber,
             "Cannot mount filesystem whose qid numbers aren't synchronised with current filesystem.");
 
@@ -1933,12 +1933,12 @@ impl FS {
         if path_infos.parentid.is_none()
         {
             print_debug!("Mount failed: parent for path not found: {}", path);
-            return (None, ENOENT);
+            return (None, ErrorNumber::ENOENT);
         }
         if path_infos.id.is_none()
         {
             print_debug!("Mount failed: file already exists at path: {}", path);
-            return (None, EEXIST);
+            return (None, ErrorNumber::EEXIST);
         }
         if path_infos.forward_path.is_some()
         {
@@ -1952,7 +1952,7 @@ impl FS {
             } 
             else {
                 return (Some(self.get_forwarder(parent_mount_id, mount_id.unwrap())),
-                SUCCESS);
+                ErrorNumber::SUCCESS);
             }
         }
 
@@ -1962,7 +1962,7 @@ impl FS {
         let idx = self.create_forwarder(mount_id, 0);
         self.link_under_dir(path_infos.parentid.unwrap(), idx, &path_infos.name);
 
-        return (Some(idx), SUCCESS);
+        return (Some(idx), ErrorNumber::SUCCESS);
     }
     /**
      * @param {number} type
@@ -2016,7 +2016,7 @@ impl FS {
      * @param {number} flags
      * @return {number} One of P9_LOCK_SUCCESS / P9_LOCK_BLOCKED / P9_LOCK_ERROR / P9_LOCK_GRACE.
      */
-    pub fn lock(&mut self, id : usize, request : &FSLockRegion, flags : i32) -> i32 {
+    pub fn lock(&mut self, id : usize, request : &FSLockRegion, flags : i32) -> P9LockStatus {
         let inode = &self.inodes[id];
 
         if FS::is_forwarder(inode)
@@ -2033,7 +2033,7 @@ impl FS {
         // (1) Check whether lock is possible before any modification.
         if request_copy.r#type != P9_LOCK_TYPE_UNLCK && self.get_lock(id, request_copy).is_some()
         {
-            return P9_LOCK_BLOCKED;
+            return P9LockStatus::Blocked;
         }
         {
             let inode_mut = &mut self.inodes[id];
@@ -2084,7 +2084,7 @@ impl FS {
                 {
                     // Requested region is already locked with the required type.
                     // Return early - no need to modify anything.
-                    return P9_LOCK_SUCCESS;
+                    return P9LockStatus::Success;
                 }
 
                 if length1 > 0
@@ -2215,7 +2215,7 @@ impl FS {
             }
         }
 
-        return P9_LOCK_SUCCESS;
+        return P9LockStatus::Success;
     }
     pub fn read_dir(&mut self, path : &str) -> Option<Vec<String>> {
         let p = self.search_path(path);

@@ -27,18 +27,33 @@ pub const MAX_REPLYBUFFER_SIZE : i32 = 16 * 1024 * 1024;
 // TODO
 // flush
 
-pub const SUCCESS : i32 = 0;
 
-pub const EPERM  : i32 = 1;       /* Operation not permitted */
-pub const ENOENT : i32 = 2;      /* No such file or directory */
-pub const EBADF : i32 = 8;       /* Bad file descriptor */
-pub const EEXIST : i32 = 17;      /* File exists */
-pub const EINVAL : i32 = 22;     /* Invalid argument */
-pub const ENOTEMPTY : i32 = 39;  /* Directory not empty */
-pub const ESPIPE : i32 = 70;   /* The specified file descriptor refers to a pipe or FIFO. */
-pub const EPROTO : i32 = 71;  /* Protocol error */
-pub const ENOTCAPABLE: i32 = 76; /* Not Capable */
-pub const EOPNOTSUPP : i32 = 95;  /* Operation is not supported */
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorNumber {
+    SUCCESS = 0,
+    /// Operation not permitted
+    EPERM = 1,
+    /// No such file or directory
+    ENOENT = 2,
+    /// Bad file descriptor
+    EBADF = 8,
+    /// File exists
+    EEXIST = 17,
+    /// Invalid argument
+    EINVAL = 22,
+    /// Directory not empty
+    ENOTEMPTY = 39,
+    /// The specified file descriptor refers to a pipe or FIFO.
+    ESPIPE = 70,
+    /// Protocol error
+    EPROTO = 71,
+    /// Not Capable
+    ENOTCAPABLE = 76,
+    /// Operation is not supported
+    EOPNOTSUPP = 95
+}
+
 
 pub const P9_SETATTR_MODE : Number = 0x00000001;
 pub const P9_SETATTR_UID : Number = 0x00000002;
@@ -73,10 +88,14 @@ pub const P9_LOCK_TYPES:  [&str; 3] = ["shared", "exclusive", "unlock"];
 pub const P9_LOCK_FLAGS_BLOCK : i32 = 1;
 pub const P9_LOCK_FLAGS_RECLAIM : i32 = 2;
 
-pub const P9_LOCK_SUCCESS : i32 = 0;
-pub const P9_LOCK_BLOCKED : i32 = 1;
-pub const P9_LOCK_ERROR : i32 = 2;
-pub const P9_LOCK_GRACE : i32 = 3;
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum P9LockStatus {
+    Success = 0,
+    Blocked = 1,
+    Error = 2,
+    Grace = 3
+}
 
 pub const FID_NONE : i32 = -1;
 pub const FID_INODE : i32 = 1;
@@ -264,8 +283,21 @@ pub struct FileStat {
 
 
 
-
-
+bitflags! {
+    /// Represents a set of flags.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[repr(C)]
+    pub struct FstFlags : u16 {
+        /// Adjust the last data access timestamp to the value stored in `filestat::atim`.
+        const Atim = 1 << 0;
+        /// Adjust the last data access timestamp to the time of clock `clockid::realtime`.
+        const AtimNow = 1 << 1;
+        /// Adjust the last data modification timestamp to the value stored in `filestat::mtim`.
+        const Mtim = 1 << 2;
+        /// Adjust the last data modification timestamp to the time of clock `clockid::realtime`.
+        const MtimNow = 1 << 3;
+    }
+}
 
 // TODO: bus
 
@@ -414,27 +446,27 @@ impl Virtio9p {
         stat.fs_rights_inheriting = file_descriptor.rights_inheriting;
     }
 
-    pub fn fd_stat_set_flags(&mut self, fd: usize, flags: FdFlags) -> i32 {
+    pub fn fd_stat_set_flags(&mut self, fd: usize, flags: FdFlags) -> ErrorNumber {
         let file_descriptor = self.file_descriptors.get_mut(&fd).unwrap();
         file_descriptor.flags = flags;
-        SUCCESS
+        ErrorNumber::SUCCESS
     }
 
-    pub fn fd_stat_set_rights(&mut self, fd: usize, rights: FdRights, rights_inheriting: FdRights) -> i32 {
+    pub fn fd_stat_set_rights(&mut self, fd: usize, rights: FdRights, rights_inheriting: FdRights) -> ErrorNumber {
         let file_descriptor = self.file_descriptors.get_mut(&fd).unwrap();
         // only allowed to remove capabilities, not add them
         if (rights | file_descriptor.rights) != file_descriptor.rights ||
            (rights_inheriting | file_descriptor.rights_inheriting) != rights_inheriting {
-            ENOTCAPABLE
+            ErrorNumber::ENOTCAPABLE
         }
         else {
             file_descriptor.rights = rights;
             file_descriptor.rights_inheriting = rights_inheriting;
-            SUCCESS
+            ErrorNumber::SUCCESS
         }
     }
 
-    pub fn get_file_stat(&self, fd: usize, filestat : &mut FileStat) -> i32{
+    pub fn get_file_stat(&self, fd: usize, filestat : &mut FileStat) -> ErrorNumber{
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = file_descriptor.inode_id;
         let inode = &self.fs.get_inode(inode_id);
@@ -462,9 +494,47 @@ impl Virtio9p {
         filestat.mtim = inode.mtime;
         // Last file status change timestamp.
         filestat.ctim = inode.ctime;
-        SUCCESS
+        ErrorNumber::SUCCESS
     }
 
+    pub fn file_stat_set_size(&mut self, fd : usize, size : usize) -> ErrorNumber {
+        let file_descriptor = &self.file_descriptors[&fd];
+        let inode_id = file_descriptor.inode_id;
+        // only change size of files, not symlinks or directories
+        if self.get_inode_filetype(inode_id) != FdFileType::RegularFile {
+            return ErrorNumber::EOPNOTSUPP;
+        }
+
+        self.fs.change_size(inode_id, size);
+
+        ErrorNumber::SUCCESS
+    }
+
+    pub fn file_stat_set_times(&mut self, fd : usize, atim: Timestamp, mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
+        let inode = &mut self.fs.get_inode_mutable(self.file_descriptors[&fd].inode_id);
+        
+        // Adjust the last data access timestamp to the value stored in `filestat::atim`.
+        if (fst_flags & FstFlags::Atim) == FstFlags::Atim {
+            inode.atime = atim;
+        }
+
+        // Adjust the last data access timestamp to the time of clock `clockid::realtime`.
+        if (fst_flags & FstFlags::AtimNow) == FstFlags::AtimNow {
+            inode.atime = FS::seconds_since_epoch();
+        }
+
+        // Adjust the last data modification timestamp to the value stored in `filestat::mtim`.
+        if (fst_flags & FstFlags::Mtim) == FstFlags::Mtim {
+            inode.mtime = mtim;
+        }
+
+        // Adjust the last data modification timestamp to the time of clock `clockid::realtime`.
+        if (fst_flags & FstFlags::AtimNow) == FstFlags::AtimNow {
+            inode.mtime = FS::seconds_since_epoch();
+        }
+        
+        ErrorNumber::SUCCESS
+    }
     /*
         /** @type {VirtIO} */
         this.virtio = new VirtIO(cpu,
