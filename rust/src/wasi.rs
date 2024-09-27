@@ -269,14 +269,47 @@ pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> i32 {
         EBADF // invalid file (file doesn't exist)
     }
 }
-/*
+
 
 /// Adjust the flags associated with a file descriptor.
 /// Note: This is similar to `fcntl(fd, F_SETFL, flags)` in POSIX.
-pub fn fd_fdstat_set_flags(arg0: i32, arg1: i32) -> i32;
+// Parameters
+// fd: The file descriptor to apply the new flags to.
+// flags: The flags to apply to the file descriptor.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> i32 {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ESPIPE; // can't set flags on pipe
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.fd_stat_set_flags(fd_file, flags)
+    } else {
+        EBADF // invalid file (file doesn't exist)
+    }
+}
+
 /// Adjust the rights associated with a file descriptor.
 /// This can only be used to remove rights, and returns `errno::notcapable` if called in a way that would attempt to add rights
-pub fn fd_fdstat_set_rights(arg0: i32, arg1: i64, arg2: i64) -> i32;
+// fd: The file descriptor to apply the new rights to.
+// fs_rights_base: The base rights to apply to the file descriptor.
+// fs_rights_inheriting: The inheriting rights to apply to the file descriptor.
+pub fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> i32 {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ESPIPE; // can't set rights on pipe
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.fd_stat_set_rights(fd_file, fs_rights_base, fs_rights_inheriting)
+    } else {
+        EBADF // invalid file (file doesn't exist)
+    }
+
+}
+/*
 /// Return the attributes of an open file.
 pub fn fd_filestat_get(arg0: i32, arg1: i32) -> i32;
 /// Adjust the size of an open file. If this increases the file's size, the extra bytes are filled with zeros.

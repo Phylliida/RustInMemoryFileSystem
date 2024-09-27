@@ -33,10 +33,11 @@ pub const ENOENT : i32 = 2;      /* No such file or directory */
 pub const EBADF : i32 = 8;       /* Bad file descriptor */
 pub const EEXIST : i32 = 17;      /* File exists */
 pub const EINVAL : i32 = 22;     /* Invalid argument */
-pub const EOPNOTSUPP : i32 = 95;  /* Operation is not supported */
 pub const ENOTEMPTY : i32 = 39;  /* Directory not empty */
 pub const ESPIPE : i32 = 70;   /* The specified file descriptor refers to a pipe or FIFO. */
 pub const EPROTO : i32 = 71;  /* Protocol error */
+pub const ENOTCAPABLE: i32 = 76; /* Not Capable */
+pub const EOPNOTSUPP : i32 = 95;  /* Operation is not supported */
 
 pub const P9_SETATTR_MODE : Number = 0x00000001;
 pub const P9_SETATTR_UID : Number = 0x00000002;
@@ -124,6 +125,7 @@ pub enum FdFileType {
 bitflags! {
     /// Represents a set of flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[repr(C)]
     pub struct FdFlags: u16 {
         /// Append mode: Data written to the file is always appended to the file's end.
         const Append = 1<<0;
@@ -254,9 +256,9 @@ const PIPE_MAX_FD : i32 = 2;
 #[derive(Clone)]
 pub struct FileDescriptor {
     pub inode_id : usize,
-    pub fd_flags : FdFlags,
-    pub fd_type : FdFileType,
-    pub fd_rights : FdRights,
+    pub flags : FdFlags,
+    pub rights : FdRights,
+    pub rights_inheriting : FdRights,
     pub fd : usize,
 }
 
@@ -328,12 +330,12 @@ impl Virtio9p {
     // since it is not synchronised with renames done outside of 9p. Hard-links, linking and unlinking
     // operations also mean that having a single filename no longer makes sense.
     // Set TRACK_FILENAMES = true (in config.js) to sync dbg_name during 9p renames.
-    pub fn create_fd(&mut self, inode_id: usize, fd_flags : FdFlags, fd_type : FdFileType, fd_rights: FdRights) -> &FileDescriptor {       
+    pub fn create_fd(&mut self, inode_id: usize, flags : FdFlags, rights: FdRights, rights_inheriting: FdRights) -> &FileDescriptor {       
         let file_descriptor = FileDescriptor {
             inode_id: inode_id, 
-            fd_flags : fd_flags,
-            fd_type: fd_type,
-            fd_rights: fd_rights,
+            flags : flags,
+            rights: rights,
+            rights_inheriting: rights_inheriting,
             fd: self.next_fd
         };
         self.next_fd += 1;
@@ -349,7 +351,8 @@ impl Virtio9p {
     pub fn close_fd(&mut self, fd: usize) {
         if let Some(mut file_descriptor) = self.file_descriptors.remove(&fd) {
             // remove all rights
-            file_descriptor.fd_rights = FdRights::empty();
+            file_descriptor.rights = FdRights::empty();
+            file_descriptor.rights_inheriting = FdRights::empty();
         }
     }
 
@@ -368,10 +371,29 @@ impl Virtio9p {
             } else {
                 FdFileType::RegularFile
             };
-        stat.fs_flags = file_descriptor.fd_flags;
-        stat.fs_rights_base = file_descriptor.fd_rights;
-        // TODO: Inheriting rights
-        stat.fs_rights_inheriting = FdRights::empty();
+        stat.fs_flags = file_descriptor.flags;
+        stat.fs_rights_base = file_descriptor.rights;
+        stat.fs_rights_inheriting = file_descriptor.rights_inheriting;
+    }
+
+    pub fn fd_stat_set_flags(&mut self, fd: usize, flags: FdFlags) -> i32 {
+        let file_descriptor = self.file_descriptors.get_mut(&fd).unwrap();
+        file_descriptor.flags = flags;
+        SUCCESS
+    }
+
+    pub fn fd_stat_set_rights(&mut self, fd: usize, rights: FdRights, rights_inheriting: FdRights) -> i32 {
+        let file_descriptor = self.file_descriptors.get_mut(&fd).unwrap();
+        // only allowed to remove capabilities, not add them
+        if (rights | file_descriptor.rights) != file_descriptor.rights ||
+           (rights_inheriting | file_descriptor.rights_inheriting) != rights_inheriting {
+            ENOTCAPABLE
+        }
+        else {
+            file_descriptor.rights = rights;
+            file_descriptor.rights_inheriting = rights_inheriting;
+            SUCCESS
+        }
     }
 
     /*
