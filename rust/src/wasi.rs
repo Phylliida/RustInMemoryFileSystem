@@ -369,6 +369,7 @@ pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Ti
 #[inline(never)]
 pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut i32) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
         // TODO: pread from pipe
     }
 
@@ -390,8 +391,19 @@ pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: 
 // buf: A pointer to a Prestat structure where the metadata will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut Prestat) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        unsafe {
+            fs.prestat_get(fd_file, &mut *buf)
+        }
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Return a description of the given preopened file descriptor.
 // fd: The preopened file descriptor to query.
@@ -400,7 +412,17 @@ pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut Prestat) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        let dst_arr = unsafe { std::slice::from_raw_parts_mut(path, max_len as usize) };
+        fs.prestat_dir_name(fd_file, dst_arr)
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 
 /// Write to a file descriptor, without using and updating the file descriptor's offset.
@@ -413,7 +435,16 @@ pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> E
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nwritten: *mut usize) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 
 /// Read from a file descriptor.
@@ -425,7 +456,16 @@ pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset:
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Read directory entries from a directory.
 /// When successful, the contents of the output buffer consist of a sequence of
@@ -444,7 +484,16 @@ pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *m
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_readdir(fd: i32, buf: *mut u8, buf_len: i32, cookie: i64, bufused: *mut usize) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 
 /// Atomically replace a file descriptor by renumbering another file descriptor.
@@ -460,7 +509,24 @@ pub extern "C" fn fd_readdir(fd: i32, buf: *mut u8, buf_len: i32, cookie: i64, b
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe_from) = Virtio9p::get_pipe_fd(from) {
+        return ErrorNumber::ESPIPE; // what are u doing
+    }
+    if let Some(fd_pipe_to) = Virtio9p::get_pipe_fd(to) {
+        return ErrorNumber::ESPIPE; // what are u doing
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file_from) = fs.get_file_fd(from) {
+        if let Some(fd_file_to) = fs.get_file_fd(to) {
+            fs.do_something()
+        }
+        else {
+            ErrorNumber::EBADF
+        }
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 
 /// Move the offset of a file descriptor.
@@ -472,7 +538,16 @@ pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: i32, newoffset: *mut usize) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 
 /// Synchronize the data and metadata of a file to disk.
@@ -481,7 +556,16 @@ pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: i32, newoffset: *mut usi
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        ErrorNumber::SUCCESS // don't need to do anything, it's always syncronized
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Return the current offset of a file descriptor.
 /// Note: This is similar to `lseek(fd, 0, SEEK_CUR)` in POSIX.
@@ -490,7 +574,16 @@ pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Write to a file descriptor.
 /// Note: This is similar to `writev` in POSIX.
@@ -501,7 +594,16 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, len: i32, res: *mut usize) -> ErrorNumber{
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 
 /// Create a directory.
@@ -512,7 +614,16 @@ pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, len: i32, res:
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_create_directory(fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let fs = GLOBAL_FS.lock().unwrap();
+    if let Some(fd_file) = fs.get_file_fd(fd) {
+        fs.do_something()
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Return the attributes of a file or directory.
 /// Note: This is similar to `stat` in POSIX.

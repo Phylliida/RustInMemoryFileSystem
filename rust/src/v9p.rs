@@ -8,6 +8,8 @@ use std::collections::hash_map::Entry;
 use crate::filesystem::{FS, UInt8Array};
 use bitflags::bitflags;
 
+use std::cmp::min;
+
 //use crate::marshall::*;
 //use crate::print_debug;
 //use crate::wasi::wasi_print_internal;
@@ -336,24 +338,17 @@ pub struct SrcBuf {
 pub type SrcIoVec<'a> = &'a [SrcBuf];
 pub type DstIoVec<'a> = &'a [DstBuf];
 
-#[repr(C)]
+#[repr(u8)]
 #[derive(Copy, Clone)]
-pub struct Prestat {
-    pub tag: u8,
-    pub u: PrestatU,
+pub enum PreStatDirectoryType {
+    PreOpenTypeDir = 0
 }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub union PrestatU {
-    pub dir: PrestatDir,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct PrestatDir {
-    /// The length of the directory name for use with `fd_prestat_dir_name`.
-    pub pr_name_len: usize,
+pub struct PreStat {
+    pub directory_type: PreStatDirectoryType,
+    pub directory_path_len: usize
 }
 
 // TODO: bus
@@ -612,6 +607,40 @@ impl Virtio9p {
         }
         ErrorNumber::SUCCESS
     }
+
+    pub fn prestat_get(&mut self, fd: usize, prestat : &mut PreStat) -> ErrorNumber{
+        let inode_id = self.file_descriptors[&fd].inode_id;
+
+        if self.get_inode_filetype(inode_id) != FdFileType::Directory {
+            return ErrorNumber::EINVAL; // only valid for directories
+        }
+        prestat.directory_type = PreStatDirectoryType::PreOpenTypeDir; // only one valid type right now
+        prestat.directory_path_len = self.fs.get_full_path(inode_id).as_bytes().len();
+
+        ErrorNumber::SUCCESS
+    }
+
+    pub fn prestat_dir_name(&mut self, fd: usize, buffer: &mut [u8]) -> ErrorNumber {
+        let inode_id = self.file_descriptors[&fd].inode_id;
+
+        if self.get_inode_filetype(inode_id) != FdFileType::Directory {
+            return ErrorNumber::EINVAL; // only valid for directories
+        }
+
+        let path = self.fs.get_full_path(inode_id);
+        let path_bytes = path.as_bytes();
+
+        // copy directory name into buffer
+        buffer.copy_from_slice(&path_bytes[0..min(path_bytes.len(), buffer.len())]);
+
+
+        ErrorNumber::SUCCESS
+    }
+
+    pub fn do_something(&self) -> ErrorNumber {
+        ErrorNumber::SUCCESS
+    }
+
 
     /*
         /** @type {VirtIO} */
