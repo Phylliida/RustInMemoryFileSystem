@@ -627,8 +627,8 @@ pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_le
 
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
-        let path = unsafe { get_str(path, path_len as usize) };
-        fs.create_directory(parent_dir_fd, path)
+        let path_str = unsafe { get_str(path, path_len as usize) };
+        fs.create_directory(parent_dir_fd, path_str)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -654,9 +654,9 @@ pub extern "C" fn path_filestat_get(parent_fd: i32,
 
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
-        let path = unsafe { get_str(path, path_len as usize) };
+        let path_str = unsafe { get_str(path, path_len as usize) };
         let result_ref = unsafe { &mut *result };
-        fs.path_file_stat_get(parent_dir_fd, symlink_flags, path, result_ref)
+        fs.path_file_stat_get(parent_dir_fd, symlink_flags, path_str, result_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -675,14 +675,24 @@ pub extern "C" fn path_filestat_get(parent_fd: i32,
 #[inline(never)]
 pub extern "C" fn path_filestat_set_times(
     parent_fd: i32,
-    flags: i32,
+    symlink_flags: SymlinkLookupFlags,
     path: *const u8,
     path_len: i32,
     atim: Timestamp,
     mtim: Timestamp,
     fst_flags: FstFlags,
 ) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path = unsafe { get_str(path, path_len as usize) };
+        fs.path_file_stat_set_times(parent_dir_fd, symlink_flags, path, atim, mtim, fst_flags)
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Create a hard link.
 /// Note: This is similar to `linkat` in POSIX.

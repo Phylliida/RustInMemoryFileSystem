@@ -599,7 +599,15 @@ impl Virtio9p {
     }
 
     pub fn file_stat_set_times(&mut self, fd : FileDescriptorID, atim: Timestamp, mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
-        let inode = &mut self.fs.get_inode_mutable(self.file_descriptors[&fd].inode_id);
+        self.file_stat_set_times_from_inode_id(
+            self.file_descriptors[&fd].inode_id,
+            atim,
+            mtim,
+            fst_flags)
+    }
+
+    pub fn file_stat_set_times_from_inode_id(&mut self, inode_id : INodeID, atim: Timestamp, mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
+        let inode = &mut self.fs.get_inode_mutable(inode_id);
         
         // Adjust the last data access timestamp to the value stored in `filestat::atim`.
         if (fst_flags & FstFlags::Atim) == FstFlags::Atim {
@@ -792,6 +800,27 @@ impl Virtio9p {
             ErrorNumber::EBADF
         }
     }
+
+    pub fn path_file_stat_set_times(&mut self,
+        parent_fd: FileDescriptorID,
+        symlink_flags: SymlinkLookupFlags,
+        path: &str,
+        atim: Timestamp,
+        mtim: Timestamp,
+        fst_flags: FstFlags) -> ErrorNumber
+    {   
+        if let Some(inode_id) = self.lookup_path_inode(parent_fd, symlink_flags, path) {
+            self.file_stat_set_times_from_inode_id(
+                inode_id,
+                atim,
+                mtim,
+                fst_flags)
+        }
+        else {
+            ErrorNumber::EBADF
+        }
+    }
+
 
     pub fn do_something(&self) -> ErrorNumber {
         ErrorNumber::SUCCESS
