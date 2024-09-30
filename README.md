@@ -33,3 +33,30 @@ make
 # What about stdin/stdout/stderr?
 
 In progress
+
+# How do I use this in my rust code?
+
+Just use regular file system commands like you would in any other rust program, and then target wasm32-wasip1. That'll export any WASI file system commands you need, and you can connect them up to this wasm.
+
+# Alternatives
+
+I wasn't able to find any suitable alternatives online.
+
+- Emscripten's WASMFS seemed a sensible choice, so I [previously wrote a port for it](https://github.com/Phylliida/EmscriptenWasmFSWrapper). However I couldn't get it working well, and it's missing quite a few features
+- [https://github.com/WebAssembly/wasi-filesystem](https://github.com/WebAssembly/wasi-filesystem) is read-only
+- [https://github.com/wasm-forge/ic-wasi-polyfill](https://github.com/wasm-forge/ic-wasi-polyfill) is a wrapper for the internet computer (some crypto aws alternative), and isn't a standalone wasm
+
+The following are rust, in memory file system alternatives that may be worth writing WASI wrappers for (but don't currently have WASI wrappers for them)
+- [https://github.com/gz/btfs](https://github.com/gz/btfs)
+- [https://github.com/GodTamIt/btrfs-diskformat](https://github.com/GodTamIt/btrfs-diskformat)
+- [https://github.com/twmb/rsfs](https://github.com/twmb/rsfs)
+- [https://github.com/andrewhalle/memfs](https://github.com/andrewhalle/memfs)
+
+# Further reading
+
+Other in memory file system implementations
+
+- [https://crates.io/crates/nine-memfs](https://crates.io/crates/nine-memfs) says is buggy :/
+- [https://github.com/golemfactory/sp-wasm/tree/master/sp-wasm-memfs](https://github.com/golemfactory/sp-wasm/tree/master/sp-wasm-memfs)
+- [https://github.com/phR0ze/rivia-vfs](https://github.com/phR0ze/rivia-vfs) has a memory file system
+- [https://github.com/manuel-woelker/rust-vfs](https://github.com/manuel-woelker/rust-vfs), though it says MemoryFS is intended mainly for unit tests
