@@ -95,13 +95,12 @@ pub fn wasi_print_internal(pipe : Pipe, msg: &String) -> ErrorNumber {
     }
 }
 
-// from wasm-forge/ic-wasi-polyfill
+// modified from wasm-forge/ic-wasi-polyfill
 
-pub fn get_file_name<'a>(path: *const u8, path_len: usize) -> &'a str {
-    let path_bytes = unsafe { std::slice::from_raw_parts(path, path_len) };
-    let file_name = unsafe { std::str::from_utf8_unchecked(path_bytes) };
-
-    file_name
+pub unsafe fn get_str<'a>(path: *const u8, path_len: usize) -> &'a str {
+    let path_bytes = std::slice::from_raw_parts(path, path_len);
+    let res_str = std::str::from_utf8_unchecked(path_bytes);
+    res_str
 }
 
 use std::sync::{LazyLock, Mutex};
@@ -158,7 +157,7 @@ pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> Erro
     }
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         ErrorNumber::ESPIPE // invalid file (it's a pipe)
-    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fd(fd) {
+    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
         // we don't currently use advise, just return success
         ErrorNumber::SUCCESS
     } else {
@@ -185,9 +184,8 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
         return ErrorNumber::ESPIPE; // invalid file (it's a pipe)
     }
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.allocate(fd_file, offset, len);
-        ErrorNumber::SUCCESS
+    if let Some(fd_file) = fs.get_fd(fd) {
+        fs.allocate(fd_file, offset, len)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -203,9 +201,8 @@ pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
         return ErrorNumber::SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
     };
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.close_fd(fd_file);
-        ErrorNumber::SUCCESS
+    if let Some(fd_file) = fs.get_fd(fd) {
+        fs.close_fd(fd_file)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -218,7 +215,7 @@ pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
 pub extern "C" fn fd_datasync(fd: i32) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         ErrorNumber::SUCCESS // also does nothing for pipes
-    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_file_fd(fd) {
+    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
         // we don't currently use advise, just return success
         ErrorNumber::SUCCESS
     } else {
@@ -239,22 +236,18 @@ pub extern "C" fn fd_datasync(fd: i32) -> ErrorNumber {
 #[inline(never)]
 pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        unsafe {
-            let stat = &mut *buf_ptr;
-            stat.fs_filetype = FdFileType::CharacterDevice; // streams are character devices
-            stat.fs_flags = FdFlags::empty();
-            stat.fs_rights_base = Virtio9p::get_pipe_rights(fd_pipe);
-            stat.fs_rights_inheriting = FdRights::empty();
-        }
+        let stat = unsafe { &mut *buf_ptr };
+        stat.fs_filetype = FdFileType::CharacterDevice; // streams are character devices
+        stat.fs_flags = FdFlags::empty();
+        stat.fs_rights_base = Virtio9p::get_pipe_rights(fd_pipe);
+        stat.fs_rights_inheriting = FdRights::empty();
         return ErrorNumber::SUCCESS;
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        unsafe {
-            fs.fd_stat(fd_file, &mut *buf_ptr);
-        }
-        ErrorNumber::SUCCESS
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let stat = unsafe { &mut *buf_ptr };
+        fs.fd_stat(fd_file, stat)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -274,7 +267,7 @@ pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         fs.fd_stat_set_flags(fd_file, flags)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -294,7 +287,7 @@ pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rig
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         fs.fd_stat_set_rights(fd_file, fs_rights_base, fs_rights_inheriting)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -310,10 +303,9 @@ pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        unsafe {
-            fs.get_file_stat(fd_file, &mut *stat)
-        }
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let stat_ref = unsafe { &mut *stat };
+        fs.get_file_stat(fd_file, stat_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -329,7 +321,7 @@ pub extern "C" fn fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         fs.file_stat_set_size(fd_file, size as usize)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -350,7 +342,7 @@ pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Ti
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         fs.file_stat_set_times(fd_file, st_atim, st_mtim, fst_flags)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -374,14 +366,13 @@ pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: 
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        // from https://github.com/wasm-forge/ic-wasi-polyfill/blob/bd7bf38e665d0147ddee1ba428052456978a4028/src/lib.rs#L291C5-L292C80
+    if let Some(fd_file) = fs.get_fd(fd) {
+        // modified from https://github.com/wasm-forge/ic-wasi-polyfill/blob/bd7bf38e665d0147ddee1ba428052456978a4028/src/lib.rs#L291C5-L292C80
         let dst_io_vec = iovs as *const DstBuf;
-        unsafe {
-            let dst_io_vec = std::slice::from_raw_parts(dst_io_vec, iovs_len as usize);
-            // because we specify offset, the fd's offset won't be used or modified
-            fs.read_vec(fd_file, dst_io_vec, Some(offset as usize), &mut *nread)
-        }
+        let dst_io_vec = unsafe { std::slice::from_raw_parts(dst_io_vec, iovs_len as usize) };
+        let nread_ref = unsafe { &mut *nread };
+        // because we specify offset, the fd's offset won't be used or modified
+        fs.read_vec(fd_file, dst_io_vec, Some(offset as usize), nread_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -398,10 +389,9 @@ pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        unsafe {
-            fs.prestat_get(fd_file, &mut *buf)
-        }
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let buf_ref = unsafe {&mut *buf};
+        fs.prestat_get(fd_file, buf_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -418,7 +408,7 @@ pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> E
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         let dst_arr = unsafe { std::slice::from_raw_parts_mut(path, max_len as usize) };
         fs.prestat_dir_name(fd_file, dst_arr)
     } else {
@@ -441,15 +431,12 @@ pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset:
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        let writing_vec: &[SrcBuf] = unsafe {
-            let casted_vec = iovs as *const SrcBuf;
-            std::slice::from_raw_parts(casted_vec, iovs_len as usize)
-        };
-        unsafe {
-            // because we specify offset, the fd's offset won't be used or modified
-            fs.write_vec(fd_file, writing_vec, Some(offset as usize), &mut *nwritten)
-        }
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let casted_vec = iovs as *const SrcBuf;
+        let writing_vec: &[SrcBuf] = unsafe { std::slice::from_raw_parts(casted_vec, iovs_len as usize) };
+        let nwritten_ref = unsafe { &mut *nwritten };
+        // because we specify offset, the fd's offset won't be used or modified
+        fs.write_vec(fd_file, writing_vec, Some(offset as usize), nwritten_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -469,13 +456,12 @@ pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *m
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         // from https://github.com/wasm-forge/ic-wasi-polyfill/blob/bd7bf38e665d0147ddee1ba428052456978a4028/src/lib.rs#L291C5-L292C80
-        let dst_io_vec = iovs as *const DstBuf;
-        unsafe {
-            let dst_io_vec = std::slice::from_raw_parts(dst_io_vec, iovs_len as usize);
-            fs.read_vec(fd_file, dst_io_vec, None, &mut *nread)
-        }        
+        let dst_buf = iovs as *const DstBuf;
+        let dst_io_vec = unsafe { std::slice::from_raw_parts(dst_buf, iovs_len as usize) };
+        let nread_ref = unsafe {&mut *nread};
+        fs.read_vec(fd_file, dst_io_vec, None, nread_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -502,7 +488,7 @@ pub extern "C" fn fd_readdir(fd: i32, buf: *mut u8, buf_len: i32, cookie: i64, b
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         fs.do_something()
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -530,8 +516,8 @@ pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file_from) = fs.get_file_fd(from) {
-        if let Some(fd_file_to) = fs.get_file_fd(to) {
+    if let Some(fd_file_from) = fs.get_fd(from) {
+        if let Some(fd_file_to) = fs.get_fd(to) {
             fs.do_something()
         }
         else {
@@ -556,10 +542,9 @@ pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        unsafe {
-            fs.seek(fd_file, offset, whence, &mut *newoffset)
-        }
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let newoffset_ref = unsafe { &mut *newoffset };
+        fs.seek(fd_file, offset, whence, newoffset_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -576,7 +561,7 @@ pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
         ErrorNumber::SUCCESS // don't need to do anything, it's always syncronized
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -594,10 +579,9 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        unsafe {
-            fs.tell(fd_file, &mut *offset)
-        }
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let offset_ref = unsafe { &mut *offset };
+        fs.tell(fd_file, offset_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -616,15 +600,14 @@ pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32,
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
+    if let Some(fd_file) = fs.get_fd(fd) {
+        let casted_vec = iovs as *const SrcBuf;
         let writing_vec: &[SrcBuf] = unsafe {
-            let casted_vec = iovs as *const SrcBuf;
             std::slice::from_raw_parts(casted_vec, iovs_len as usize)
         };
-        unsafe {
-            // because we specify offset, the fd's offset won't be used or modified
-            fs.write_vec(fd_file, writing_vec, None, &mut *nwritten)
-        }
+        let nwritten_ref = unsafe {&mut *nwritten};
+        // because we specify offset, the fd's offset won't be used or modified
+        fs.write_vec(fd_file, writing_vec, None, nwritten_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -632,19 +615,20 @@ pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32,
 
 /// Create a directory.
 /// Note: This is similar to `mkdirat` in POSIX.
-// fd: The file descriptor representing the directory that the path is relative to.
+// parent_fd: The file descriptor representing the directory that the path is relative to.
 // path: A wasm pointer to a null-terminated string containing the path data.
 // path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_create_directory(fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_file_fd(fd) {
-        fs.do_something()
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path = unsafe { get_str(path, path_len as usize) };
+        fs.create_directory(parent_dir_fd, path)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }

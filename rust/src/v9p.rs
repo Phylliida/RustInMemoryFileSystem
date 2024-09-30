@@ -446,7 +446,7 @@ impl Virtio9p {
         }
     }
 
-    pub fn get_file_fd(&self, fd: i32) -> Option<usize> {
+    pub fn get_fd(&self, fd: i32) -> Option<usize> {
         if fd > PIPE_MAX_FD && self.file_descriptors.contains_key(&(fd as usize)) {
             return Some(fd as usize)
         }
@@ -478,19 +478,24 @@ impl Virtio9p {
         }
     }
 
-    pub fn close_fd(&mut self, fd: usize) {
+    pub fn close_fd(&mut self, fd: usize) -> ErrorNumber {
         if let Some(mut file_descriptor) = self.file_descriptors.remove(&fd) {
             // remove all rights
             file_descriptor.rights = FdRights::empty();
             file_descriptor.rights_inheriting = FdRights::empty();
+            ErrorNumber::SUCCESS
+        }
+        else {
+            ErrorNumber::ENOENT
         }
     }
 
-    pub fn allocate(&mut self, fd: usize, offset: i64, len: i64) {
+    pub fn allocate(&mut self, fd: usize, offset: i64, len: i64) -> ErrorNumber {
         let inode_id = self.file_descriptors[&fd].inode_id;
         if self.fs.get_size(inode_id) < (offset + len) as usize {
             self.fs.change_size(inode_id, (offset+len) as usize);
         }
+        ErrorNumber::SUCCESS
     }
 
     fn get_inode_filetype(&self, inode_id: usize) -> FdFileType {
@@ -503,12 +508,13 @@ impl Virtio9p {
         }
     }
 
-    pub fn fd_stat(&self, fd: usize, stat: &mut FdStat) {
+    pub fn fd_stat(&self, fd: usize, stat: &mut FdStat) -> ErrorNumber {
         let file_descriptor = &self.file_descriptors[&fd];
         stat.fs_filetype = self.get_inode_filetype(file_descriptor.inode_id);
         stat.fs_flags = file_descriptor.flags;
         stat.fs_rights_base = file_descriptor.rights;
         stat.fs_rights_inheriting = file_descriptor.rights_inheriting;
+        ErrorNumber::SUCCESS
     }
 
     pub fn fd_stat_set_flags(&mut self, fd: usize, flags: FdFlags) -> ErrorNumber {
@@ -686,7 +692,6 @@ impl Virtio9p {
         // copy directory name into buffer
         buffer.copy_from_slice(&path_bytes[0..min(path_bytes.len(), buffer.len())]);
 
-
         ErrorNumber::SUCCESS
     }
 
@@ -730,6 +735,15 @@ impl Virtio9p {
             *newoffset = new_offset as usize;
             ErrorNumber::SUCCESS
         }
+    }
+
+    pub fn create_directory(&mut self, parent_fd: usize, name: &str) -> ErrorNumber {
+        let parent_inode_id = self.file_descriptors[&parent_fd].inode_id;
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
+            return ErrorNumber::EINVAL; // only valid for parents that are directories
+        }
+        let _result_inode_id = self.fs.create_directory(name, Some(parent_inode_id));
+        return ErrorNumber::SUCCESS
     }
 
     pub fn do_something(&self) -> ErrorNumber {
