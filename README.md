@@ -60,3 +60,4 @@ Other in memory file system implementations
 - [https://github.com/golemfactory/sp-wasm/tree/master/sp-wasm-memfs](https://github.com/golemfactory/sp-wasm/tree/master/sp-wasm-memfs)
 - [https://github.com/phR0ze/rivia-vfs](https://github.com/phR0ze/rivia-vfs) has a memory file system
 - [https://github.com/manuel-woelker/rust-vfs](https://github.com/manuel-woelker/rust-vfs), though it says MemoryFS is intended mainly for unit tests
+- [https://github.com/cloudflare/workers-wasi](https://github.com/cloudflare/workers-wasi) soft and hard links not yet supported
