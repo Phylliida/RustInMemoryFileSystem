@@ -5,7 +5,7 @@
 // 9P2000.L protocol ( https://code.google.com/p/diod/wiki/protocol )
 
 // TODO: forwarding search symlink inode is a little weird, the inode will be looked up in current inode list but it should be looked up in forwarder inode list
-
+// TODO: do checks to see if INodeID and FileDescriptorID casted to each other to check for mistakes
 
 use std::collections::hash_map::Entry;
 use crate::filesystem::{FS, UInt8Array};
@@ -820,6 +820,26 @@ impl Virtio9p {
             ErrorNumber::EBADF
         }
     }
+
+    pub fn link(&mut self, 
+        old_parent_dir_fd : FileDescriptorID,
+        old_symlink_flags : SymlinkLookupFlags,
+        old_path_str : &str,
+        new_parent_fd : FileDescriptorID,
+        new_path_str : &str) -> ErrorNumber {
+        if let Some(old_inode_id) = self.lookup_path_inode(old_parent_dir_fd, old_symlink_flags, old_path_str) {
+            let new_parent_inode_id = self.file_descriptors[&new_parent_fd].inode_id;
+            if self.get_inode_filetype(new_parent_inode_id) != FdFileType::Directory {
+                ErrorNumber::EBADF
+            } else {
+                self.fs.link(new_parent_inode_id, old_inode_id, new_path_str)
+            }
+        }
+        else {
+            ErrorNumber::EBADF
+        }
+    }
+
 
 
     pub fn do_something(&self) -> ErrorNumber {

@@ -696,25 +696,48 @@ pub extern "C" fn path_filestat_set_times(
 }
 /// Create a hard link.
 /// Note: This is similar to `linkat` in POSIX.
-// old_fd: The file descriptor representing the directory that the old_path is relative to.
+// old_parent_fd: The file descriptor representing the directory that the old_path is relative to.
 // old_flags: Flags to control how the old_path is understood.
 // old_path: A wasm pointer to a null-terminated string containing the old file path.
 // old_path_len: The length of the old_path string.
-// new_fd: The file descriptor representing the directory that the new_path is relative to.
+// new_parent_fd: The file descriptor representing the directory that the new_path is relative to.
 // new_path: A wasm pointer to a null-terminated string containing the new file path.
 // new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_link(
-    old_fd: i32,
-    old_flags: i32,
+    old_parent_fd: i32,
+    old_flags: SymlinkLookupFlags,
     old_path: *const u8,
     old_path_len: i32,
-    new_fd: i32,
+    new_parent_fd: i32,
     new_path: *const u8,
     new_path_len: i32
 ) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(old_parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(old_parent_dir_fd) = fs.get_fd(old_parent_fd) {
+        if let Some(new_parent_dir_fd) = fs.get_fd(new_parent_fd) {
+            let old_path_str = unsafe { get_str(old_path, old_path_len as usize) };
+            let new_path_str = unsafe { get_str(new_path, new_path_len as usize) };
+            fs.link(old_parent_dir_fd,
+                old_flags,
+                old_path_str,
+                new_parent_dir_fd,
+                new_path_str)
+        }
+        else {
+            ErrorNumber::EBADF // new parent doesn't exist
+        }
+    } else {
+        ErrorNumber::EBADF // old parent doesn't exist
+    }
 }
 /// Open a file or directory.
 /// The returned file descriptor is not guaranteed to be the lowest-numbered
