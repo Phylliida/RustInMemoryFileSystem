@@ -1091,6 +1091,16 @@ impl Virtio9p {
             new_path_str)
     }
 
+    pub fn symlink(&mut self, parent_fd: FileDescriptorID, old_path_str: &str, new_path_str: &str) -> ErrorNumber {
+        let parent_inode_id = self.file_descriptors[&parent_fd].inode_id;
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
+            return ErrorNumber::ENOTDIR; // not in a directory
+        }
+
+        let _symlink_node_id = self.fs.create_symlink(old_path_str, parent_inode_id, new_path_str);
+        ErrorNumber::SUCCESS
+    }
+
 
 
     pub fn do_something(&self) -> ErrorNumber {

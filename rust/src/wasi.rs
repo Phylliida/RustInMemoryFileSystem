@@ -928,11 +928,33 @@ pub extern "C" fn path_rename(old_parent_fd: i32,
 pub extern "C" fn path_symlink(
     old_path: *const u8,
     old_path_len: i32,
-    fd: i32,
+    parent_fd: i32,
     new_path: *const u8,
-    new_path_len: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    new_path_len: i32) -> ErrorNumber
+{
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if old_path_len < 0 || new_path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let old_path_str = unsafe { get_str(old_path, old_path_len as usize) };
+        let new_path_str = unsafe { get_str(new_path, new_path_len as usize) };
+        fs.symlink(parent_dir_fd, old_path_str, new_path_str)
+    }
+    else {
+        ErrorNumber::EBADF
+    }   
 }
+    
 /// Unlink a file.
 /// Return `errno::isdir` if the path refers to a directory.
 /// Note: This is similar to `unlinkat(fd, path, 0)` in POSIX.
