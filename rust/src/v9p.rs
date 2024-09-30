@@ -4,6 +4,9 @@
 // Implementation of the 9p filesystem device following the
 // 9P2000.L protocol ( https://code.google.com/p/diod/wiki/protocol )
 
+// TODO: forwarding search symlink inode is a little weird, the inode will be looked up in current inode list but it should be looked up in forwarder inode list
+
+
 use std::collections::hash_map::Entry;
 use crate::filesystem::{FS, UInt8Array};
 use bitflags::bitflags;
@@ -18,6 +21,8 @@ use crate::filesystem::*;
 use std::collections::HashMap;
 
 pub type Number = u64;
+
+pub type FileDescriptorID = usize;
 
 // Feature bit (bit position) for mount tag.
 pub const VIRTIO_9P_F_MOUNT_TAG : i32 = 0;
@@ -268,7 +273,7 @@ pub struct FileStat {
     /// Device ID of device containing the file.
     pub dev: Device,
     /// File serial number.
-    pub ino: usize,
+    pub ino: INodeID,
     /// File type.
     pub filetype: FdFileType,
     /// Number of hard links to the file.
@@ -362,6 +367,15 @@ pub enum SeekWhence {
     End = 2,
 }
 
+#[repr(u32)]
+#[derive(Copy, Clone)]
+pub enum SymlinkLookupFlags {
+    /// If the path points to a symbolic link, the function will consider the symlink itself, not its target.
+    NoFollow = 0,
+    /// If the path points to a symbolic link, the function will follow the link and use the target of the symlink instead.
+    Follow = 1
+}
+
 
 // TODO: bus
 
@@ -376,18 +390,18 @@ pub struct Virtio9p {
     pub replybuffer : UInt8Array,
     pub replybuffersize : usize,
     pub file_descriptors : HashMap<usize, FileDescriptor>,
-    pub next_fd : usize
+    pub next_fd : FileDescriptorID
 }
 const PIPE_MAX_FD : i32 = 2; 
 
 
 
 pub struct FileDescriptor {
-    pub inode_id : usize,
+    pub inode_id : INodeID,
     pub flags : FdFlags,
     pub rights : FdRights,
     pub rights_inheriting : FdRights,
-    pub fd : usize,
+    pub fd : FileDescriptorID,
     pub offset : usize,
 }
 
@@ -417,7 +431,7 @@ impl Virtio9p {
             replybuffer: UInt8Array::new(msize*2),
             replybuffersize: 0,
             file_descriptors : HashMap::new(),
-            next_fd: (PIPE_MAX_FD+1) as usize,
+            next_fd: (PIPE_MAX_FD+1) as FileDescriptorID,
         };
 
         return result;
@@ -446,9 +460,9 @@ impl Virtio9p {
         }
     }
 
-    pub fn get_fd(&self, fd: i32) -> Option<usize> {
-        if fd > PIPE_MAX_FD && self.file_descriptors.contains_key(&(fd as usize)) {
-            return Some(fd as usize)
+    pub fn get_fd(&self, fd: i32) -> Option<FileDescriptorID> {
+        if fd > PIPE_MAX_FD && self.file_descriptors.contains_key(&(fd as FileDescriptorID)) {
+            return Some(fd as FileDescriptorID)
         }
         else {
             None
@@ -459,7 +473,7 @@ impl Virtio9p {
     // since it is not synchronised with renames done outside of 9p. Hard-links, linking and unlinking
     // operations also mean that having a single filename no longer makes sense.
     // Set TRACK_FILENAMES = true (in config.js) to sync dbg_name during 9p renames.
-    pub fn create_fd(&mut self, inode_id: usize, flags : FdFlags, rights: FdRights, rights_inheriting: FdRights) -> &FileDescriptor {       
+    pub fn create_fd(&mut self, inode_id: INodeID, flags : FdFlags, rights: FdRights, rights_inheriting: FdRights) -> &FileDescriptor {       
         let file_descriptor = FileDescriptor {
             inode_id: inode_id, 
             flags : flags,
@@ -478,7 +492,7 @@ impl Virtio9p {
         }
     }
 
-    pub fn close_fd(&mut self, fd: usize) -> ErrorNumber {
+    pub fn close_fd(&mut self, fd: FileDescriptorID) -> ErrorNumber {
         if let Some(mut file_descriptor) = self.file_descriptors.remove(&fd) {
             // remove all rights
             file_descriptor.rights = FdRights::empty();
@@ -490,7 +504,7 @@ impl Virtio9p {
         }
     }
 
-    pub fn allocate(&mut self, fd: usize, offset: i64, len: i64) -> ErrorNumber {
+    pub fn allocate(&mut self, fd: FileDescriptorID, offset: i64, len: i64) -> ErrorNumber {
         let inode_id = self.file_descriptors[&fd].inode_id;
         if self.fs.get_size(inode_id) < (offset + len) as usize {
             self.fs.change_size(inode_id, (offset+len) as usize);
@@ -498,7 +512,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    fn get_inode_filetype(&self, inode_id: usize) -> FdFileType {
+    fn get_inode_filetype(&self, inode_id: INodeID) -> FdFileType {
         if self.fs.is_directory(inode_id) {
             FdFileType::Directory
         } else if self.fs.get_inode(inode_id).mode == S_IFLNK {
@@ -508,7 +522,7 @@ impl Virtio9p {
         }
     }
 
-    pub fn fd_stat(&self, fd: usize, stat: &mut FdStat) -> ErrorNumber {
+    pub fn fd_stat(&self, fd: FileDescriptorID, stat: &mut FdStat) -> ErrorNumber {
         let file_descriptor = &self.file_descriptors[&fd];
         stat.fs_filetype = self.get_inode_filetype(file_descriptor.inode_id);
         stat.fs_flags = file_descriptor.flags;
@@ -517,13 +531,13 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn fd_stat_set_flags(&mut self, fd: usize, flags: FdFlags) -> ErrorNumber {
+    pub fn fd_stat_set_flags(&mut self, fd: FileDescriptorID, flags: FdFlags) -> ErrorNumber {
         let file_descriptor = self.file_descriptors.get_mut(&fd).unwrap();
         file_descriptor.flags = flags;
         ErrorNumber::SUCCESS
     }
 
-    pub fn fd_stat_set_rights(&mut self, fd: usize, rights: FdRights, rights_inheriting: FdRights) -> ErrorNumber {
+    pub fn fd_stat_set_rights(&mut self, fd: FileDescriptorID, rights: FdRights, rights_inheriting: FdRights) -> ErrorNumber {
         let file_descriptor = self.file_descriptors.get_mut(&fd).unwrap();
         // only allowed to remove capabilities, not add them
         if (rights | file_descriptor.rights) != file_descriptor.rights ||
@@ -537,9 +551,12 @@ impl Virtio9p {
         }
     }
 
-    pub fn get_file_stat(&self, fd: usize, filestat : &mut FileStat) -> ErrorNumber{
+    pub fn get_file_stat(&self, fd: FileDescriptorID, filestat : &mut FileStat) -> ErrorNumber{
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = file_descriptor.inode_id;
+        self.get_file_stat_from_inode_id(inode_id, filestat)
+    }
+    pub fn get_file_stat_from_inode_id(&self, inode_id: INodeID, filestat : &mut FileStat) -> ErrorNumber {
         let inode = &self.fs.get_inode(inode_id);
         // Device ID of device containing the file.
         filestat.dev = if let Some(dev_id) = inode.mount_id {
@@ -550,7 +567,7 @@ impl Virtio9p {
         // File serial number.
         filestat.ino = inode_id;
         // File type.
-        filestat.filetype = self.get_inode_filetype(file_descriptor.inode_id);
+        filestat.filetype = self.get_inode_filetype(inode_id);
         // Number of hard links to the file.
         filestat.nlink = inode.nlinks as u64;
         // For regular files, the file size in bytes. For symbolic links, the length in bytes of the pathname contained in the symbolic link.
@@ -568,7 +585,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn file_stat_set_size(&mut self, fd : usize, size : usize) -> ErrorNumber {
+    pub fn file_stat_set_size(&mut self, fd : FileDescriptorID, size : usize) -> ErrorNumber {
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = file_descriptor.inode_id;
         // only change size of files, not symlinks or directories
@@ -581,7 +598,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn file_stat_set_times(&mut self, fd : usize, atim: Timestamp, mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
+    pub fn file_stat_set_times(&mut self, fd : FileDescriptorID, atim: Timestamp, mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
         let inode = &mut self.fs.get_inode_mutable(self.file_descriptors[&fd].inode_id);
         
         // Adjust the last data access timestamp to the value stored in `filestat::atim`.
@@ -607,7 +624,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn read_vec(&mut self, fd: usize, dst: DstIoVec, offset: Option<usize>, n_read: &mut usize) -> ErrorNumber {
+    pub fn read_vec(&mut self, fd: FileDescriptorID, dst: DstIoVec, offset: Option<usize>, n_read: &mut usize) -> ErrorNumber {
         *n_read = 0;
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = self.file_descriptors[&fd].inode_id;
@@ -641,7 +658,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn write_vec(&mut self, fd: usize, src: &[SrcBuf], offset: Option<usize>, n_written: &mut usize) -> ErrorNumber {
+    pub fn write_vec(&mut self, fd: FileDescriptorID, src: &[SrcBuf], offset: Option<usize>, n_written: &mut usize) -> ErrorNumber {
         *n_written = 0;
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = file_descriptor.inode_id;
@@ -667,7 +684,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn prestat_get(&mut self, fd: usize, prestat : &mut PreStat) -> ErrorNumber{
+    pub fn prestat_get(&mut self, fd: FileDescriptorID, prestat : &mut PreStat) -> ErrorNumber{
         let inode_id = self.file_descriptors[&fd].inode_id;
 
         if self.get_inode_filetype(inode_id) != FdFileType::Directory {
@@ -679,7 +696,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn prestat_dir_name(&mut self, fd: usize, buffer: &mut [u8]) -> ErrorNumber {
+    pub fn prestat_dir_name(&mut self, fd: FileDescriptorID, buffer: &mut [u8]) -> ErrorNumber {
         let inode_id = self.file_descriptors[&fd].inode_id;
 
         if self.get_inode_filetype(inode_id) != FdFileType::Directory {
@@ -695,7 +712,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn tell(&self, fd : usize, offset : &mut usize) -> ErrorNumber {
+    pub fn tell(&self, fd : FileDescriptorID, offset : &mut usize) -> ErrorNumber {
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = file_descriptor.inode_id;
 
@@ -706,7 +723,7 @@ impl Virtio9p {
         ErrorNumber::SUCCESS
     }
 
-    pub fn seek(&mut self, fd: usize, offset: i64, whence: SeekWhence, newoffset: &mut usize) -> ErrorNumber {
+    pub fn seek(&mut self, fd: FileDescriptorID, offset: i64, whence: SeekWhence, newoffset: &mut usize) -> ErrorNumber {
         let file_descriptor = &self.file_descriptors[&fd];
         let inode_id = file_descriptor.inode_id;
         let inode = self.fs.get_inode(inode_id);
@@ -737,13 +754,43 @@ impl Virtio9p {
         }
     }
 
-    pub fn create_directory(&mut self, parent_fd: usize, name: &str) -> ErrorNumber {
+    pub fn create_directory(&mut self, parent_fd: FileDescriptorID, name: &str) -> ErrorNumber {
         let parent_inode_id = self.file_descriptors[&parent_fd].inode_id;
         if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
             return ErrorNumber::EINVAL; // only valid for parents that are directories
         }
         let _result_inode_id = self.fs.create_directory(name, Some(parent_inode_id));
         return ErrorNumber::SUCCESS
+    }
+
+    // This isn't technically correct when we have multiple mounted file systems because inode could be on a seperate mounted file system
+    // however, WASI doesn't support multiple mounted file systems, so it's ok for now
+    pub fn lookup_path_inode(&mut self, parent_fd: FileDescriptorID, symlink_flags: SymlinkLookupFlags, path: &str) -> Option<INodeID> {
+        let parent_inode_id = self.file_descriptors[&parent_fd].inode_id;
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
+            None
+        } else if let Some(searched_inode_id) = self.fs.search(parent_inode_id, path) {
+            if self.fs.is_symlink(searched_inode_id) {
+                match symlink_flags {
+                    SymlinkLookupFlags::NoFollow => Some(searched_inode_id),
+                    SymlinkLookupFlags::Follow => self.fs.follow_symlink(parent_inode_id, searched_inode_id)
+                }
+            } else {
+                Some(searched_inode_id)
+            }
+        }
+        else {
+            None
+        }
+    }
+
+    pub fn path_file_stat_get(&mut self, parent_fd: FileDescriptorID, symlink_flags: SymlinkLookupFlags, path: &str, stat: &mut FileStat) -> ErrorNumber {
+        if let Some(inode_id) = self.lookup_path_inode(parent_fd, symlink_flags, path) {
+            self.get_file_stat_from_inode_id(inode_id, stat)
+        }
+        else {
+            ErrorNumber::EBADF
+        }
     }
 
     pub fn do_something(&self) -> ErrorNumber {

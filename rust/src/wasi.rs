@@ -636,19 +636,32 @@ pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_le
 /// Return the attributes of a file or directory.
 /// Note: This is similar to `stat` in POSIX.
 // fd: The file descriptor representing the directory that the path is relative to.
-// symlink_flags: Flags to control how the path is understood.
+// symlink_flags: Flags to control how the symlink path is understood.
 // path: A wasm pointer to a null-terminated string containing the file path.
 // path_len: The length of the path string.
 // result: A wasm pointer to a Filestat object where the metadata will be stored.
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_filestat_get(parent_fd: i32,
-    simlink_flags: i32,
+    symlink_flags: SymlinkLookupFlags,
     path: *const u8,
     path_len: i32,
-    result: *mut FileStat) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    result: *mut FileStat) -> ErrorNumber
+{
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path = unsafe { get_str(path, path_len as usize) };
+        let result_ref = unsafe { &mut *result };
+        fs.path_file_stat_get(parent_dir_fd, symlink_flags, path, result_ref)
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
+
 /// Adjust the timestamps of a file or directory.
 /// Note: This is similar to `utimensat` in POSIX.
 // parent_fd: The file descriptor representing the directory that the path is relative to.
