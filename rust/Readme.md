@@ -3,7 +3,7 @@ UNDER CONSTRUCTION
 
 # What is it?
 
-This is a "polyfill" that hosts a file system in memory, in pure wasm.
+This is a ~200KB "polyfill" that hosts an file system in memory, in pure wasm.
 
 It is developed around a rust port I made of the [v86 js emulator](https://github.com/copy/v86/blob/master/lib/filesystem.js)'s file system.
 
