@@ -1,4 +1,6 @@
 
+UNDER CONSTRUCTION
+
 # What is it?
 
 This is a "polyfill" that hosts a file system in memory, in pure wasm.
@@ -17,7 +19,7 @@ which is more suitable for use cases outside the browser.
 # What WASI file system commands are supported?
 
 Every `fd_` and `path_`. See [The wasi reference](https://wasix.org/docs/api-reference)
-Or you can just see [the code](https://github.com/Phylliida/v86FileSystemPort/blob/main/rust/src/wasi.rs).
+or [the code](https://github.com/Phylliida/v86FileSystemPort/blob/main/rust/src/wasi.rs) for more information
 
 # To Compile
 
@@ -27,3 +29,7 @@ rustup target add wasm32-unknown-unknown --toolchain nightly
 cd rust
 make
 ```
+
+# What about stdin/stdout/stderr?
+
+In progress

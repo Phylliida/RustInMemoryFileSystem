@@ -2,7 +2,7 @@
 TARGET = wasm32-unknown-unknown
 
 all: src/lib.rs
-	RUSTFLAGS='-C target-feature=-crt-static' cargo build --target $(TARGET)
+	RUSTFLAGS='-C target-feature=-crt-static' cargo build --target $(TARGET) --release
 
 inspect: src/lib.rs
 	wasmer inspect target/wasm32-unknown-unknown/debug/example_tokio_wasm.wasm
