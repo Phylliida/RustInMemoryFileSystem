@@ -47,6 +47,8 @@ pub enum ErrorNumber {
     EBADF = 8,
     /// File exists
     EEXIST = 17,
+    /// Not a directory
+    ENOTDIR = 20,
     /// Invalid argument
     EINVAL = 22,
     /// Directory not empty
@@ -376,6 +378,105 @@ pub enum SymlinkLookupFlags {
     Follow = 1
 }
 
+bitflags! {
+    /// Represents a set of flags.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[repr(C)]
+    // docs from https://man7.org/linux/man-pages/man2/open.2.html
+    pub struct FileOpenFlags : u32 {
+        /////// these are access modes, must include one of them
+        /// O_RDONLY, Open file for reading
+        const O_RDONLY = 0;
+        /// O_WRONLY, Open file for writing
+        const O_WRONLY = 1;
+        // O_RDWR, Open file for reading and writing
+        const O_RDWR = 2;
+
+        // file creation flags
+
+        ///  Enable the close-on-exec flag for the new file descriptor.
+        ///  Specifying this flag permits a program to avoid additional
+        ///  fcntl F_SETFD operations to set the FD_CLOEXEC flag.
+        const O_CLOEXEC = 02000000;
+        ///   If pathname does not exist, create it as a regular file.
+        const O_CREAT = 00000100;
+        /// O_DIRECTORY
+        /// If pathname is not a directory, cause the open to fail.
+        const O_DIRECTORY = 00200000;
+        /// O_EXCL
+        ///  Ensure that this call creates the file: if this flag is
+        ///  specified in conjunction with O_CREAT, and pathname
+        ///  already exists, then open() fails with the error EEXIST.
+        const O_EXCL = 00000200;
+        
+        /// O_NOFOLLOW
+        ///  If the trailing component (i.e., basename) of pathname is
+        ///  a symbolic link, then the open fails, with the error
+        ///  ELOOP.  Symbolic links in earlier components of the
+        ///  pathname will still be followed.  (Note that the ELOOP
+        ///  error that can occur in this case is indistinguishable
+        ///  from the case where an open fails because there are too
+        ///  many symbolic links found while resolving components in
+        ///  the prefix part of the pathname.)
+        const O_NOFOLLOW = 00400000;
+
+        /// O_TMPFILE
+        ///  Create an unnamed temporary regular file.  The pathname
+        ///  argument specifies a directory; an unnamed inode will be
+        ///  created in that directory's filesystem.  Anything written
+        ///  to the resulting file will be lost when the last file
+        /// descriptor is closed, unless the file is given a name.
+        const O_TMPFILE = 020000000 | 00200000;
+
+        /// O_TRUNC
+        /// If the file already exists and is a regular file and the
+        /// access mode allows writing (i.e., is O_RDWR or O_WRONLY)
+        /// it will be truncated to length 0.
+        const O_TRUNC = 00001000;
+
+        /// O_PATH
+        /// Obtain a file descriptor that can be used for two
+        ///       purposes: to indicate a location in the filesystem tree
+        ///       and to perform operations that act purely at the file
+        ///       descriptor level.  The file itself is not opened, and
+        ///       other file operations (e.g., read(2), write(2), fchmod(2),
+        ///       fchown(2), fgetxattr(2), ioctl(2), mmap(2)) fail with the
+        ///       error EBADF.
+        ///       The following operations can be performed on the resulting
+        ///       file descriptor:
+        ///       •  close(2).
+        ///       •  fchdir(2), if the file descriptor refers to a directory
+        ///          (since Linux 3.5).
+        ///       •  fstat(2) (since Linux 3.6).
+        ///       •  fstatfs(2) (since Linux 3.12).
+        ///       •  Duplicating the file descriptor (dup(2), fcntl(2)
+        ///          F_DUPFD, etc.).
+        ///       •  Getting and setting file descriptor flags (fcntl(2)
+        ///          F_GETFD and F_SETFD).
+        ///       •  Retrieving open file status flags using the fcntl(2)
+        ///          F_GETFL operation: the returned flags will include the
+        ///          bit O_PATH.
+        ///       •  Passing the file descriptor as the dirfd argument of
+        ///          openat() and the other "*at()" system calls.  This
+        ///          includes linkat(2) with AT_EMPTY_PATH (or via procfs
+        ///          using AT_SYMLINK_FOLLOW) even if the file is not a
+        ///          directory.
+        ///       •  Passing the file descriptor to another process via a
+        ///          UNIX domain socket (see SCM_RIGHTS in unix(7)).
+        ///       When O_PATH is specified in flags, flag bits other than
+        ///       O_CLOEXEC, O_DIRECTORY, and O_NOFOLLOW are ignored.
+        const O_PATH = 010000000;
+
+        //// file status flags
+        
+        /// O_APPEND  The file is opened in append mode.  Before each write(2),
+        ///   the file offset is positioned at the end of the file, as
+        ///   if with lseek.  The modification of the file offset and
+        ///   the write operation are performed as a single atomic step.
+        const O_APPEND = 00002000;
+    }
+}
+
 
 // TODO: bus
 
@@ -473,7 +574,7 @@ impl Virtio9p {
     // since it is not synchronised with renames done outside of 9p. Hard-links, linking and unlinking
     // operations also mean that having a single filename no longer makes sense.
     // Set TRACK_FILENAMES = true (in config.js) to sync dbg_name during 9p renames.
-    pub fn create_fd(&mut self, inode_id: INodeID, flags : FdFlags, rights: FdRights, rights_inheriting: FdRights) -> &FileDescriptor {       
+    pub fn create_fd(&mut self, inode_id: INodeID, flags : FdFlags, rights: FdRights, rights_inheriting: FdRights) -> &mut FileDescriptor {
         let file_descriptor = FileDescriptor {
             inode_id: inode_id, 
             flags : flags,
@@ -485,9 +586,9 @@ impl Virtio9p {
         self.next_fd += 1;
         let fd = file_descriptor.fd;
         match self.file_descriptors.entry(fd) {
-            Entry::Occupied(e) => &*e.into_mut(),
+            Entry::Occupied(e) => &mut *e.into_mut(),
             Entry::Vacant(e) => {
-                &*e.insert(file_descriptor)
+                &mut *e.insert(file_descriptor)
             }
         }
     }
@@ -832,12 +933,86 @@ impl Virtio9p {
             if self.get_inode_filetype(new_parent_inode_id) != FdFileType::Directory {
                 ErrorNumber::EBADF
             } else {
+                // link attaches the old inode to under the new parent as well, using new_path_str
                 self.fs.link(new_parent_inode_id, old_inode_id, new_path_str)
             }
         }
         else {
             ErrorNumber::EBADF
         }
+    }
+
+    pub fn path_open(&mut self,
+        parent_dir_fd : FileDescriptorID,
+        parent_symlink_flags : SymlinkLookupFlags,
+        path_str : &str,
+        oflags : FileOpenFlags, 
+        fs_rights_base : FdRights,
+        fs_rights_inheriting : FdRights,
+        fdflags : FdFlags,
+        fd_out_ref : &mut FileDescriptorID) -> ErrorNumber
+    {
+        // Todo: FileOpenFlags::O_NOFOLLOW
+        // Todo: FileOpenFlags::O_PATH (it works, is just too permissive)
+        // Todo: FileOpenFlags::TMP_FILE (we don't yet support those)
+        let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
+        
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
+            return ErrorNumber::EBADF;
+        }
+
+        let opened_inode_id = 
+            if let Some(inode_id) = self.lookup_path_inode(parent_dir_fd, parent_symlink_flags, path_str) {
+                // O_EXCL and O_CREAT means that we throw this error if file exists
+                if oflags.contains(FileOpenFlags::O_EXCL)
+                    && oflags.contains(FileOpenFlags::O_CREAT) {
+                    return ErrorNumber::EEXIST;
+                }
+                // O_DIRECTORY means it must be a directory
+                if oflags.contains(FileOpenFlags::O_DIRECTORY)
+                    && self.get_inode_filetype(inode_id) != FdFileType::Directory {
+                    return ErrorNumber::ENOTDIR;
+                }
+                // O_TMPFILE specifies that inode_id actually refers to a directory that we put our file in
+                if oflags.contains(FileOpenFlags::O_TMPFILE) {
+                    // TODO: tmpfile
+                    return ErrorNumber::EOPNOTSUPP;
+                }
+                // Otherwise, open the file as specified
+                inode_id  
+            }        
+            else if oflags.contains(FileOpenFlags::O_CREAT) {
+                if oflags.contains(FileOpenFlags::O_DIRECTORY) {
+                    self.fs.create_directory(path_str, Some(parent_inode_id))
+                } else {
+                    self.fs.create_file(path_str, parent_inode_id)
+                }
+            } else {
+                return ErrorNumber::EBADF;
+            };
+
+        // precompute for borrow checker
+        let inode_size = self.fs.get_inode(opened_inode_id).size;
+
+        let file_descriptor = self.create_fd(
+            opened_inode_id,
+            fdflags,
+            fs_rights_base, 
+            fs_rights_inheriting);
+        let file_descriptor_fd = file_descriptor.fd;
+        // truncate file if truncate flag and writing/readwrite
+        if oflags.contains(FileOpenFlags::O_TRUNC)
+            && (oflags.contains(FileOpenFlags::O_WRONLY) ||
+                oflags.contains(FileOpenFlags::O_RDWR)) {
+            self.file_stat_set_size(file_descriptor_fd, 0);
+        }
+        // we have an else because if we've truncated, no need to set offset to zero
+        // append means that we start at the end (it also means we always go to the end upon write,
+        // but that happens anyway, so this is sufficient)
+        else if oflags.contains(FileOpenFlags::O_APPEND) {
+            file_descriptor.offset = inode_size;
+        }
+        ErrorNumber::SUCCESS
     }
 
 

@@ -759,18 +759,31 @@ pub extern "C" fn path_link(
 #[inline(never)]
 pub extern "C" fn path_open(
     parent_fd: i32,
-    parent_fd_flags: i32,
+    parent_fd_flags: SymlinkLookupFlags,
     path: *const u8,
     path_len: i32,
 
-    oflags: i32,
+    oflags: FileOpenFlags,
     fs_rights_base: FdRights,
     fs_rights_inheriting: FdRights,
 
     fdflags: FdFlags,
-    res: *mut i32
+    res: *mut FileDescriptorID
 ) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path_str = unsafe { get_str(path, path_len as usize) };
+        let fd_out_ref = unsafe { &mut *res };
+        fs.path_open(parent_dir_fd, parent_fd_flags, path_str,
+            oflags, fs_rights_base, fs_rights_inheriting,
+            fdflags, fd_out_ref)
+    } else {
+        ErrorNumber::EBADF // invalid file (file doesn't exist)
+    }
 }
 /// Read the contents of a symbolic link.
 /// Note: This is similar to `readlinkat` in POSIX.
