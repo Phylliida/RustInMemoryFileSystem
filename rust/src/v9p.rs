@@ -1036,6 +1036,41 @@ impl Virtio9p {
         }
     }
 
+    pub fn path_unlink_dir(&mut self, parent_dir_fd: FileDescriptorID, path_str: &str) -> ErrorNumber {
+        let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
+        if self.get_inode_filetype(parent_dir_fd) != FdFileType::Directory {
+            return ErrorNumber::ENOTDIR; // not in a directory
+        }
+
+        if let Some(inode_id) = self.fs.search(parent_inode_id, path_str) {
+            if self.get_inode_filetype(inode_id) != FdFileType::Directory {
+                return ErrorNumber::ENOTDIR; // not a directory
+            }
+            // TODO: This should consider forwarders, but that doesn't matter for wasm bc no mounting
+            self.fs.unlink_from_dir(parent_inode_id, path_str);
+            ErrorNumber::SUCCESS
+        }
+        else {
+            ErrorNumber::EBADF // does not exist
+        }
+    }
+    pub fn path_unlink_file(&mut self, parent_dir_fd: FileDescriptorID, path_str: &str) -> ErrorNumber {
+        let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
+        if self.get_inode_filetype(parent_dir_fd) != FdFileType::Directory {
+            return ErrorNumber::EINVAL; // not in a directory
+        }
+
+        if let Some(inode_id) = self.fs.search(parent_inode_id, path_str) {
+            if self.get_inode_filetype(inode_id) != FdFileType::RegularFile {
+                return ErrorNumber::ENOTDIR; // not a file
+            }
+            self.fs.unlink(parent_inode_id, path_str)
+        }
+        else {
+            ErrorNumber::EBADF // does not exist
+        }
+    }
+
 
 
     pub fn do_something(&self) -> ErrorNumber {

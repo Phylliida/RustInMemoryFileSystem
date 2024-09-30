@@ -846,13 +846,28 @@ pub extern "C" fn path_readlink(
 /// Remove a directory.
 /// Return `errno::notempty` if the directory is not empty.
 /// Note: This is similar to `unlinkat(fd, path, AT_REMOVEDIR)` in POSIX.
-// fd: The file descriptor representing the base directory from which the path is resolved.
+// parent_fd: The file descriptor representing the base directory from which the path is resolved.
 // path: A wasm pointer to a null-terminated string containing the path of the directory to remove.
 // path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_remove_directory(fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+pub extern "C" fn path_remove_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path_str = unsafe { get_str(path, path_len as usize) };
+        fs.path_unlink_dir(parent_dir_fd, path_str)
+    }
+    else {
+        ErrorNumber::EBADF
+    }
 }
 /// Rename a file or directory.
 /// Note: This is similar to `renameat` in POSIX.
@@ -893,13 +908,29 @@ pub extern "C" fn path_symlink(
 /// Unlink a file.
 /// Return `errno::isdir` if the path refers to a directory.
 /// Note: This is similar to `unlinkat(fd, path, 0)` in POSIX.
-// dirfd: The file descriptor representing the base directory from which the path is understood.
+// parent_fd: The file descriptor representing the base directory from which the path is understood.
 // path: A wasm pointer to a null-terminated string containing the path of the file to be unlinked.
 // path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_unlink_file(dirfd: i32,
+pub extern "C" fn path_unlink_file(parent_fd: i32,
     path: *const u8,
-    path_len: i32) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    path_len: i32) -> ErrorNumber
+{
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path_str = unsafe { get_str(path, path_len as usize) };
+        fs.path_unlink_file(parent_dir_fd, path_str)
+    }
+    else {
+        ErrorNumber::EBADF
+    }    
 }
