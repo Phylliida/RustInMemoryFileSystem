@@ -871,22 +871,50 @@ pub extern "C" fn path_remove_directory(parent_fd: i32, path: *const u8, path_le
 }
 /// Rename a file or directory.
 /// Note: This is similar to `renameat` in POSIX.
-// old_fd: The file descriptor representing the base directory for the source path.
+// old_parent_fd: The file descriptor representing the base directory for the source path.
 // old_path: A wasm pointer to a null-terminated string containing the source path of the file or directory to be renamed.
 // old_path_len: The length of the old_path string.
-// new_fd: The file descriptor representing the base directory for the target path.
+// new_parent_fd: The file descriptor representing the base directory for the target path.
 // new_path: A wasm pointer to a null-terminated string containing the target path with the new name for the file or directory.
 // new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_rename(old_fd: i32,
+pub extern "C" fn path_rename(old_parent_fd: i32,
     old_path: *const u8,
     old_path_len: i32,
-    new_fd: i32,
+    new_parent_fd: i32,
     new_path: *const u8,
     new_path_len: i32)
     -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(old_parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if old_path_len < 0 || new_path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(old_parent_dir_fd) = fs.get_fd(old_parent_fd) {
+        if let Some(new_parent_dir_fd) = fs.get_fd(new_parent_fd) {
+            let old_path_str = unsafe { get_str(old_path, old_path_len as usize) };
+            let new_path_str = unsafe { get_str(new_path, new_path_len as usize) };
+            fs.rename(old_parent_dir_fd,
+                old_path_str,
+                new_parent_dir_fd,
+                new_path_str)    
+        }
+        else {
+            ErrorNumber::EBADF
+        }
+    }
+    else {
+        ErrorNumber::EBADF
+    }   
 }
 /// Create a symbolic link.
 /// Note: This is similar to `symlinkat` in POSIX.

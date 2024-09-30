@@ -1018,7 +1018,7 @@ impl Virtio9p {
 
     pub fn path_read_link(&mut self, parent_dir_fd: FileDescriptorID, path_str: &str, out_buf: &mut [u8], out_buf_used: &mut usize) -> ErrorNumber {
         let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
-        if self.get_inode_filetype(parent_dir_fd) != FdFileType::Directory {
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
             return ErrorNumber::ENOTDIR; // not in a directory
         }
 
@@ -1038,7 +1038,7 @@ impl Virtio9p {
 
     pub fn path_unlink_dir(&mut self, parent_dir_fd: FileDescriptorID, path_str: &str) -> ErrorNumber {
         let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
-        if self.get_inode_filetype(parent_dir_fd) != FdFileType::Directory {
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
             return ErrorNumber::ENOTDIR; // not in a directory
         }
 
@@ -1056,7 +1056,7 @@ impl Virtio9p {
     }
     pub fn path_unlink_file(&mut self, parent_dir_fd: FileDescriptorID, path_str: &str) -> ErrorNumber {
         let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
-        if self.get_inode_filetype(parent_dir_fd) != FdFileType::Directory {
+        if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
             return ErrorNumber::EINVAL; // not in a directory
         }
 
@@ -1069,6 +1069,26 @@ impl Virtio9p {
         else {
             ErrorNumber::EBADF // does not exist
         }
+    }
+
+    pub fn rename(&mut self, old_parent_dir_fd : FileDescriptorID,
+        old_path_str : &str,
+        new_parent_dir_fd : FileDescriptorID,
+        new_path_str : &str) -> ErrorNumber
+    {
+        let old_parent_inode_id = self.file_descriptors[&old_parent_dir_fd].inode_id;
+        if self.get_inode_filetype(old_parent_inode_id) != FdFileType::Directory {
+            return ErrorNumber::ENOTDIR; // not in a directory
+        }
+        let new_parent_inode_id = self.file_descriptors[&new_parent_dir_fd].inode_id;
+        if self.get_inode_filetype(new_parent_inode_id) != FdFileType::Directory {
+            return ErrorNumber::ENOTDIR; // not in a directory
+        }
+
+        self.fs.rename(old_parent_inode_id,
+            old_path_str,
+            new_parent_inode_id,
+            new_path_str)
     }
 
 
