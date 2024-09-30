@@ -1,5 +1,5 @@
 [package]
-name = "wasm_filesystem"
+name = "in_memory_wasm_filesystem"
 version = "1.0.0"
 authors = ["Phylliida"]
 edition = "2021"
