@@ -625,6 +625,10 @@ pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_le
         return ErrorNumber::ESPIPE;
     }
 
+    if path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
         let path_str = unsafe { get_str(path, path_len as usize) };
@@ -650,6 +654,10 @@ pub extern "C" fn path_filestat_get(parent_fd: i32,
 {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
+    }
+
+    if path_len < 0 {
+        return ErrorNumber::EINVAL;
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
@@ -686,6 +694,10 @@ pub extern "C" fn path_filestat_set_times(
         return ErrorNumber::ESPIPE;
     }
 
+    if path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
         let path = unsafe { get_str(path, path_len as usize) };
@@ -720,6 +732,11 @@ pub extern "C" fn path_link(
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
         return ErrorNumber::ESPIPE;
     }
+
+    if old_path_len < 0 || new_path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
 
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(old_parent_dir_fd) = fs.get_fd(old_parent_fd) {
@@ -774,6 +791,10 @@ pub extern "C" fn path_open(
         return ErrorNumber::ESPIPE;
     }
 
+    if path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
         let path_str = unsafe { get_str(path, path_len as usize) };
@@ -787,7 +808,7 @@ pub extern "C" fn path_open(
 }
 /// Read the contents of a symbolic link.
 /// Note: This is similar to `readlinkat` in POSIX.
-// dir_fd: The file descriptor representing the base directory from which the symlink is understood.
+// parent_fd: The file descriptor representing the base directory from which the symlink is understood.
 // path: A wasm pointer to a null-terminated string containing the path to the symlink.
 // path_len: The length of the path string.
 // buf: A wasm pointer to a buffer where the target path of the symlink will be written.
@@ -796,14 +817,31 @@ pub extern "C" fn path_open(
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_readlink(
-    dir_fd: i32,
+    parent_fd: i32,
     path: *const u8,
     path_len: i32,
-    buf: i32,
+    buf: *mut u8,
     buf_len: i32,
-    buf_used: *mut i32,
+    buf_used: *mut usize,
 ) -> ErrorNumber {
-    ErrorNumber::SUCCESS
+    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+        return ErrorNumber::ESPIPE;
+    }
+
+    if buf_len < 0 || path_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
+    if let Some(parent_dir_fd) = fs.get_fd(parent_fd) {
+        let path_str = unsafe { get_str(path, path_len as usize) };
+        let out_buf = unsafe { std::slice::from_raw_parts_mut(buf, buf_len as usize) };
+        let out_buf_used = unsafe { &mut *buf_used };
+        fs.path_read_link(parent_dir_fd, path_str, out_buf, out_buf_used)
+    }
+    else {
+        ErrorNumber::EBADF
+    }
 }
 /// Remove a directory.
 /// Return `errno::notempty` if the directory is not empty.

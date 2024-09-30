@@ -797,7 +797,7 @@ impl Virtio9p {
         let inode_id = self.file_descriptors[&fd].inode_id;
 
         if self.get_inode_filetype(inode_id) != FdFileType::Directory {
-            return ErrorNumber::EINVAL; // only valid for directories
+            return ErrorNumber::ENOTDIR; // only valid for directories
         }
         prestat.directory_type = PreStatDirectoryType::PreOpenTypeDir; // only one valid type right now
         prestat.directory_path_len = self.fs.get_full_path(inode_id).as_bytes().len();
@@ -809,7 +809,7 @@ impl Virtio9p {
         let inode_id = self.file_descriptors[&fd].inode_id;
 
         if self.get_inode_filetype(inode_id) != FdFileType::Directory {
-            return ErrorNumber::EINVAL; // only valid for directories
+            return ErrorNumber::ENOTDIR; // only valid for directories
         }
 
         let path = self.fs.get_full_path(inode_id);
@@ -866,7 +866,7 @@ impl Virtio9p {
     pub fn create_directory(&mut self, parent_fd: FileDescriptorID, name: &str) -> ErrorNumber {
         let parent_inode_id = self.file_descriptors[&parent_fd].inode_id;
         if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
-            return ErrorNumber::EINVAL; // only valid for parents that are directories
+            return ErrorNumber::ENOTDIR; // only valid for parents that are directories
         }
         let _result_inode_id = self.fs.create_directory(name, Some(parent_inode_id));
         return ErrorNumber::SUCCESS
@@ -931,7 +931,7 @@ impl Virtio9p {
         if let Some(old_inode_id) = self.lookup_path_inode(old_parent_dir_fd, old_symlink_flags, old_path_str) {
             let new_parent_inode_id = self.file_descriptors[&new_parent_fd].inode_id;
             if self.get_inode_filetype(new_parent_inode_id) != FdFileType::Directory {
-                ErrorNumber::EBADF
+                ErrorNumber::ENOTDIR
             } else {
                 // link attaches the old inode to under the new parent as well, using new_path_str
                 self.fs.link(new_parent_inode_id, old_inode_id, new_path_str)
@@ -958,7 +958,7 @@ impl Virtio9p {
         let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
         
         if self.get_inode_filetype(parent_inode_id) != FdFileType::Directory {
-            return ErrorNumber::EBADF;
+            return ErrorNumber::ENOTDIR;
         }
 
         let opened_inode_id = 
@@ -1006,13 +1006,34 @@ impl Virtio9p {
                 oflags.contains(FileOpenFlags::O_RDWR)) {
             self.file_stat_set_size(file_descriptor_fd, 0);
         }
-        // we have an else because if we've truncated, no need to set offset to zero
         // append means that we start at the end (it also means we always go to the end upon write,
         // but that happens anyway, so this is sufficient)
+        // we have an else because if we've truncated, no need to set offset to zero
+        // the else also satisfies the borrow checker
         else if oflags.contains(FileOpenFlags::O_APPEND) {
             file_descriptor.offset = inode_size;
         }
         ErrorNumber::SUCCESS
+    }
+
+    pub fn path_read_link(&mut self, parent_dir_fd: FileDescriptorID, path_str: &str, out_buf: &mut [u8], out_buf_used: &mut usize) -> ErrorNumber {
+        let parent_inode_id = self.file_descriptors[&parent_dir_fd].inode_id;
+        if self.get_inode_filetype(parent_dir_fd) != FdFileType::Directory {
+            return ErrorNumber::ENOTDIR; // not in a directory
+        }
+
+        if let Some(inode_id) = self.fs.search(parent_inode_id, path_str) {
+            if !self.fs.is_symlink(inode_id) {
+                return ErrorNumber::EINVAL; // not a symbolic link
+            }
+            let symlink_bytes = self.fs.get_inode(inode_id).symlink.as_bytes();
+            // we should truncate to however many bytes are given, according to docs https://linux.die.net/man/2/readlink
+            out_buf.copy_from_slice(&symlink_bytes[..min(symlink_bytes.len(), out_buf.len())]);
+            ErrorNumber::SUCCESS
+        }
+        else {
+            ErrorNumber::EBADF // does not exist
+        }
     }
 
 
