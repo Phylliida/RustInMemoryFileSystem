@@ -8,7 +8,7 @@
 // TODO: do checks to see if INodeID and FileDescriptorID casted to each other to check for mistakes
 
 use std::collections::hash_map::Entry;
-use crate::filesystem::{FS, UInt8Array};
+use crate::filesystem::{FS};
 use bitflags::bitflags;
 
 use std::cmp::min;
@@ -19,22 +19,23 @@ use std::cmp::min;
 use crate::wasi::*;
 use crate::filesystem::*;
 use std::collections::HashMap;
+use std::ffi::CString;
 
-pub type Number = u64;
 
 pub type FileDescriptorID = usize;
 
 // Feature bit (bit position) for mount tag.
-pub const VIRTIO_9P_F_MOUNT_TAG : i32 = 0;
+// pub const VIRTIO_9P_F_MOUNT_TAG : i32 = 0;
 // Assumed max tag length in bytes.
-pub const VIRTIO_9P_MAX_TAGLEN : i32 = 254;
+//pub const VIRTIO_9P_MAX_TAGLEN : i32 = 254;
 
-pub const MAX_REPLYBUFFER_SIZE : i32 = 16 * 1024 * 1024;
+//pub const MAX_REPLYBUFFER_SIZE : i32 = 16 * 1024 * 1024;
 
 // TODO
 // flush
 
 
+#[allow(dead_code)]
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorNumber {
@@ -64,39 +65,8 @@ pub enum ErrorNumber {
 }
 
 
-pub const P9_SETATTR_MODE : Number = 0x00000001;
-pub const P9_SETATTR_UID : Number = 0x00000002;
-pub const P9_SETATTR_GID : Number = 0x00000004;
-pub const P9_SETATTR_SIZE : Number = 0x00000008;
-pub const P9_SETATTR_ATIME : Number = 0x00000010;
-pub const P9_SETATTR_MTIME : Number = 0x00000020;
-pub const P9_SETATTR_CTIME : Number = 0x00000040;
-pub const P9_SETATTR_ATIME_SET : Number = 0x00000080;
-pub const P9_SETATTR_MTIME_SET : Number = 0x00000100;
 
-pub const P9_STAT_MODE_DIR : Number = 0x80000000;
-pub const P9_STAT_MODE_APPEND : Number = 0x40000000;
-pub const P9_STAT_MODE_EXCL : Number = 0x20000000;
-pub const P9_STAT_MODE_MOUNT : Number = 0x10000000;
-pub const P9_STAT_MODE_AUTH : Number = 0x08000000;
-pub const P9_STAT_MODE_TMP : Number = 0x04000000;
-pub const P9_STAT_MODE_SYMLINK : Number = 0x02000000;
-pub const P9_STAT_MODE_LINK : Number = 0x01000000;
-pub const P9_STAT_MODE_DEVICE : Number = 0x00800000;
-pub const P9_STAT_MODE_NAMED_PIPE : Number = 0x00200000;
-pub const P9_STAT_MODE_SOCKET : Number = 0x00100000;
-pub const P9_STAT_MODE_SETUID : Number = 0x00080000;
-pub const P9_STAT_MODE_SETGID : Number = 0x00040000;
-pub const P9_STAT_MODE_SETVTX : Number = 0x00010000;
-
-pub const P9_LOCK_TYPE_RDLCK : i32 = 0;
-pub const P9_LOCK_TYPE_WRLCK : i32 = 1;
-pub const P9_LOCK_TYPE_UNLCK : i32 = 2;
-pub const P9_LOCK_TYPES:  [&str; 3] = ["shared", "exclusive", "unlock"];
-
-pub const P9_LOCK_FLAGS_BLOCK : i32 = 1;
-pub const P9_LOCK_FLAGS_RECLAIM : i32 = 2;
-
+#[allow(dead_code)]
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum P9LockStatus {
@@ -106,30 +76,17 @@ pub enum P9LockStatus {
     Grace = 3
 }
 
-pub const FID_NONE : i32 = -1;
-pub const FID_INODE : i32 = 1;
-pub const FID_XATTR : i32 = 2;
+//pub const FID_NONE : i32 = -1;
+//pub const FID_INODE : i32 = 1;
+//pub const FID_XATTR : i32 = 2;
 
 pub const STDIN_FD : i32 = 0;
 pub const STDOUT_FD : i32 = 1;
 pub const STDERR_FD : i32 = 2;
 
 
-// types modified from https://github.com/wasm-forge/ic-wasi-polyfill/blob/main/src/wasi_mock.rs
-#[repr(C)]
-pub struct Fdstat {
-    /// File type.
-    pub fs_filetype: FdFileType,
-    /// File descriptor flags.
-    pub fs_flags: FdFlags,
-    /// Rights that apply to this file descriptor.
-    pub fs_rights_base: FdRights,
-    /// Maximum set of rights that may be installed on new file descriptors that
-    /// are created through this file descriptor, e.g., through `path_open`.
-    pub fs_rights_inheriting: FdRights,
-}
 
-
+#[allow(dead_code)]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FdFileType {
@@ -317,6 +274,7 @@ pub struct Ciovec {
     pub buf_len: usize,
 }
 
+/*
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Iovec {
@@ -324,10 +282,8 @@ pub struct Iovec {
     pub buf: *mut u8,
     /// The length of the buffer to be filled.
     pub buf_len: usize,
-}
+}*/
 
-pub type IovecArray<'a> = &'a [Iovec];
-pub type CiovecArray<'a> = &'a [Ciovec];
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -342,7 +298,7 @@ pub struct SrcBuf {
     pub buf: *const u8,
     pub len: usize,
 }
-pub type SrcIoVec<'a> = &'a [SrcBuf];
+//pub type SrcIoVec<'a> = &'a [SrcBuf];
 pub type DstIoVec<'a> = &'a [DstBuf];
 
 #[repr(u8)]
@@ -358,6 +314,7 @@ pub struct PreStat {
     pub directory_path_len: usize
 }
 
+#[allow(dead_code)]
 #[repr(u32)]
 #[derive(Copy, Clone)]
 pub enum SeekWhence {
@@ -369,6 +326,7 @@ pub enum SeekWhence {
     End = 2,
 }
 
+#[allow(dead_code)]
 #[repr(u32)]
 #[derive(Copy, Clone)]
 pub enum SymlinkLookupFlags {
@@ -478,19 +436,28 @@ bitflags! {
 }
 
 
+#[repr(C)]
+pub struct DirectoryEntry {
+	d_ino : u64,
+	d_off : i64,
+	d_reclen : u16,
+	d_type : u8,
+	d_name : *mut u8,
+}
+
 // TODO: bus
 
 pub struct Virtio9p {
     pub fs : FS,
     //pub bus : Bus
-    pub configspace_tagname : [i32; 6],
-    pub configspace_taglen : usize,
-    pub version : String,
-    pub blocksize : usize,
-    pub msize : usize,
-    pub replybuffer : UInt8Array,
-    pub replybuffersize : usize,
-    pub file_descriptors : HashMap<usize, FileDescriptor>,
+    //pub configspace_tagname : [i32; 6],
+    //pub configspace_taglen : usize,
+    //pub version : String,
+    //pub blocksize : usize,
+    //pub msize : usize,
+    //pub replybuffer : UInt8Array,
+    //pub replybuffersize : usize,
+    pub file_descriptors : HashMap<FileDescriptorID, FileDescriptor>,
     pub next_fd : FileDescriptorID
 }
 const PIPE_MAX_FD : i32 = 2; 
@@ -514,8 +481,8 @@ impl Virtio9p {
     * @param {CPU} cpu
     */
     pub fn new(fs : Option<FS>) -> Virtio9p { // todo: pass in cpu and bus
-        let configspace_tagname = [0x68, 0x6F, 0x73, 0x74, 0x39, 0x70];
-        let msize = 8192;
+        //let configspace_tagname = [0x68, 0x6F, 0x73, 0x74, 0x39, 0x70];
+        //let msize = 8192;
         let fs_internal = 
             if fs.is_some() {
                 fs.unwrap()
@@ -524,15 +491,15 @@ impl Virtio9p {
             };
         let result = Virtio9p {
             fs: fs_internal,
-            configspace_tagname: configspace_tagname, // "host9p" string
-            configspace_taglen: configspace_tagname.len(),
-            version: "9P2000.L".to_owned(),
-            blocksize: 8192,
-            msize: msize,
-            replybuffer: UInt8Array::new(msize*2),
-            replybuffersize: 0,
+            //configspace_tagname: configspace_tagname, // "host9p" string
+            //configspace_taglen: configspace_tagname.len(),
+            //version: "9P2000.L".to_owned(),
+            //blocksize: 8192,
+            //msize: msize,
+            //replybuffer: UInt8Array::new(msize*2),
+            //replybuffersize: 0,
             file_descriptors : HashMap::new(),
-            next_fd: (PIPE_MAX_FD+1) as FileDescriptorID,
+            next_fd: 0 as FileDescriptorID,
         };
 
         return result;
@@ -540,9 +507,9 @@ impl Virtio9p {
 
     pub fn get_pipe_fd(fd: i32) -> Option<Pipe> {
         match fd {
-            0 => Some(Pipe::Stdin),
-            1 => Some(Pipe::Stdout),
-            2 => Some(Pipe::Stderr),
+            STDIN_FD => Some(Pipe::Stdin),
+            STDOUT_FD => Some(Pipe::Stdout),
+            STDERR_FD => Some(Pipe::Stderr),
             _ => None,
         }
     }
@@ -730,6 +697,30 @@ impl Virtio9p {
             inode.mtime = FS::seconds_since_epoch();
         }
         
+        ErrorNumber::SUCCESS
+    }
+
+    // note: the order can vary due to hashmap so cookie not a great idea
+    pub fn read_dir(&mut self,
+        dir_fd : FileDescriptorID,
+        dir_entries: &mut [DirectoryEntry],
+        cookie : usize,
+        bufused : &mut usize) -> ErrorNumber
+    {
+        let inode_id = self.file_descriptors[&dir_fd].inode_id;
+        let directories = self.fs.read_dir_from_inode(inode_id);
+        let entries_writing = min(directories.len(), dir_entries.len());
+        for i in cookie..entries_writing {
+            let c_string = CString::new(&*directories[i]).expect("CString::new failed");
+            // Get the raw pointer and prevent the CString from being dropped
+            dir_entries[i].d_reclen = (19 + c_string.as_bytes().len()) as u16;
+            // Assign the pointer to d_name
+            let raw_ptr = c_string.into_raw();
+            dir_entries[i].d_name = raw_ptr as *mut u8;
+            dir_entries[i].d_off = i as i64;
+            // 19 from other entries
+        }
+        *bufused = entries_writing;
         ErrorNumber::SUCCESS
     }
 
@@ -1013,6 +1004,8 @@ impl Virtio9p {
         else if oflags.contains(FileOpenFlags::O_APPEND) {
             file_descriptor.offset = inode_size;
         }
+
+        *fd_out_ref = file_descriptor_fd;
         ErrorNumber::SUCCESS
     }
 
@@ -1027,8 +1020,10 @@ impl Virtio9p {
                 return ErrorNumber::EINVAL; // not a symbolic link
             }
             let symlink_bytes = self.fs.get_inode(inode_id).symlink.as_bytes();
+            let bytes_reading = min(symlink_bytes.len(), out_buf.len());
             // we should truncate to however many bytes are given, according to docs https://linux.die.net/man/2/readlink
-            out_buf.copy_from_slice(&symlink_bytes[..min(symlink_bytes.len(), out_buf.len())]);
+            out_buf.copy_from_slice(&symlink_bytes[..bytes_reading]);
+            *out_buf_used = bytes_reading;
             ErrorNumber::SUCCESS
         }
         else {
@@ -1102,10 +1097,13 @@ impl Virtio9p {
     }
 
 
-
-    pub fn do_something(&self) -> ErrorNumber {
-        ErrorNumber::SUCCESS
+    pub fn renumber(&mut self, from_fd : FileDescriptorID, to_fd : FileDescriptorID) -> ErrorNumber {
+        let from_inode_id = self.file_descriptors[&from_fd].inode_id;
+        self.file_descriptors.get_mut(&to_fd).unwrap().inode_id = from_inode_id;
+        // rights and flags are preserved and not modified
+        return ErrorNumber::SUCCESS;
     }
+
 
 
     /*

@@ -10,15 +10,18 @@ use crate::wasi::Pipe::Stderr;
 pub type ClockID = u32;
 pub type Timestamp = u64;
 
-// from https://www.jakubkonka.com/2020/04/28/rust-wasi-from-scratch.html
-type Fd = u32;
-type Size = usize;
-type Rval = u32;
+
+#[link(wasm_import_module = "iostream")]
+extern "C" {
+    // needed for stdin/stdout/stderr (mostly, for panic to be able to print)
+    // pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> ErrorNumber;
+    pub fn read_stdin(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber;
+    pub fn write_stdout(fd: i32, iovs_ptr: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber;
+    pub fn write_stderr(fd: i32, iovs_ptr: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber;
+}
 
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 extern "C" {
-    // needed for stdin/stdout/stderr (mostly, for panic to be able to print)
-    pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> ErrorNumber;
     // needed to set file times
     pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> ErrorNumber;
 }
@@ -90,8 +93,10 @@ pub fn wasi_print_internal(pipe : Pipe, msg: &String) -> ErrorNumber {
     };
     let ciovecs = [ciovec];
     let mut nwritten = 0;
-    unsafe {
-        return fd_write(pipe as u32, ciovecs.as_ptr(), ciovecs.len(), &mut nwritten)
+    match pipe {
+        Pipe::Stdin => ErrorNumber::EOPNOTSUPP,
+        Pipe::Stdout => unsafe { write_stdout(pipe as i32, ciovecs.as_ptr(), ciovecs.len() as i32, &mut nwritten) },
+        Pipe::Stderr => unsafe { write_stderr(pipe as i32, ciovecs.as_ptr(), ciovecs.len() as i32, &mut nwritten) }
     }
 }
 
@@ -105,9 +110,11 @@ pub unsafe fn get_str<'a>(path: *const u8, path_len: usize) -> &'a str {
 
 use std::sync::{LazyLock, Mutex};
 
-static GLOBAL_FS: LazyLock<Mutex<Virtio9p>> = LazyLock::new(|| Mutex::new(Virtio9p::new(None)));
+static GLOBAL_FS: LazyLock<Mutex<Virtio9p>> = LazyLock::new(|| {
+    set_panic_hook();
+    Mutex::new(Virtio9p::new(None))
+});
 
-const PIPE_MAX_FD : i32 = 2; 
 
 #[repr(i32)]
 pub enum Pipe {
@@ -151,13 +158,13 @@ pub enum Pipe {
 // advice: The advice to be given to the operating system
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> ErrorNumber {
+pub extern "C" fn fd_advise(fd: i32, _offset: i64, _len: i64, _advice: i32) -> ErrorNumber {
     if fd < 0 {
         return ErrorNumber::EINVAL; // invalid file (negative) // posix_fadvise says we should return this if negative
     }
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         ErrorNumber::ESPIPE // invalid file (it's a pipe)
-    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
+    } else if let Some(_fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
         // we don't currently use advise, just return success
         ErrorNumber::SUCCESS
     } else {
@@ -180,7 +187,7 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
     if offset < 0 || len <= 0 {
         return ErrorNumber::EINVAL;
     }
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // invalid file (it's a pipe)
     }
     let mut fs = GLOBAL_FS.lock().unwrap();
@@ -197,9 +204,10 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
-    };
+    }
+
     let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_fd(fd) {
         fs.close_fd(fd_file)
@@ -213,9 +221,9 @@ pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_datasync(fd: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         ErrorNumber::SUCCESS // also does nothing for pipes
-    } else if let Some(fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
+    } else if let Some(_fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
         // we don't currently use advise, just return success
         ErrorNumber::SUCCESS
     } else {
@@ -262,7 +270,7 @@ pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set flags on pipe
     }
 
@@ -282,7 +290,7 @@ pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
 
@@ -298,7 +306,7 @@ pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rig
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
 
@@ -316,7 +324,7 @@ pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
 
@@ -337,7 +345,7 @@ pub extern "C" fn fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set time on pipe
     }
 
@@ -360,9 +368,8 @@ pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Ti
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut usize) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ErrorNumber::ESPIPE;
-        // TODO: pread from pipe
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::EOPNOTSUPP; // we don't support pread for pipe
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
@@ -384,7 +391,7 @@ pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: 
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -403,7 +410,7 @@ pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -426,8 +433,8 @@ pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> E
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nwritten: *mut usize) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ErrorNumber::ESPIPE;
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+        return ErrorNumber::EOPNOTSUPP; // we don't support pwrite for iostream
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
@@ -452,7 +459,11 @@ pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset:
 #[inline(never)]
 pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ErrorNumber::ESPIPE;
+        return match fd_pipe {
+            Pipe::Stdin => unsafe { read_stdin(fd, iovs, iovs_len, nread) },
+            Pipe::Stdout => ErrorNumber::EOPNOTSUPP,
+            Pipe::Stderr => ErrorNumber::EOPNOTSUPP
+        };
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
@@ -482,14 +493,22 @@ pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *m
 // bufused: A pointer to store the number of bytes stored in the buffer.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_readdir(fd: i32, buf: *mut u8, buf_len: i32, cookie: i64, bufused: *mut usize) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+pub extern "C" fn fd_readdir(fd: i32, buf: *mut DirectoryEntry, buf_len: i32, cookie: i64, bufused: *mut usize) -> ErrorNumber {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    if buf_len < 0 {
+        return ErrorNumber::EINVAL;
+    }
+
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file) = fs.get_fd(fd) {
-        fs.do_something()
+        let dir_entries: &mut [DirectoryEntry] = unsafe {
+            std::slice::from_raw_parts_mut(buf, buf_len as usize)
+        };
+        let bufused_ref = unsafe { &mut *bufused };
+        fs.read_dir(fd_file, dir_entries, cookie as usize, bufused_ref)
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
@@ -508,17 +527,17 @@ pub extern "C" fn fd_readdir(fd: i32, buf: *mut u8, buf_len: i32, cookie: i64, b
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
-    if let Some(fd_pipe_from) = Virtio9p::get_pipe_fd(from) {
+    if let Some(_fd_pipe_from) = Virtio9p::get_pipe_fd(from) {
         return ErrorNumber::ESPIPE; // what are u doing
     }
-    if let Some(fd_pipe_to) = Virtio9p::get_pipe_fd(to) {
+    if let Some(_fd_pipe_to) = Virtio9p::get_pipe_fd(to) {
         return ErrorNumber::ESPIPE; // what are u doing
     }
 
-    let fs = GLOBAL_FS.lock().unwrap();
+    let mut fs = GLOBAL_FS.lock().unwrap();
     if let Some(fd_file_from) = fs.get_fd(from) {
         if let Some(fd_file_to) = fs.get_fd(to) {
-            fs.do_something()
+            fs.renumber(fd_file_from, fd_file_to)
         }
         else {
             ErrorNumber::EBADF
@@ -537,7 +556,7 @@ pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *mut usize) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -556,12 +575,12 @@ pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
     let fs = GLOBAL_FS.lock().unwrap();
-    if let Some(fd_file) = fs.get_fd(fd) {
+    if let Some(_fd_file) = fs.get_fd(fd) {
         ErrorNumber::SUCCESS // don't need to do anything, it's always syncronized
     } else {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
@@ -574,7 +593,7 @@ pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -586,6 +605,7 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
         ErrorNumber::EBADF // invalid file (file doesn't exist)
     }
 }
+
 /// Write to a file descriptor.
 /// Note: This is similar to `writev` in POSIX.
 // fd: The file descriptor (opened with writing permission) to write to.
@@ -594,9 +614,13 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
 // nwritten: A wasm pointer to an M::Offset value where the number of bytes written will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber{
+pub extern "C" fn fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber{
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
-        return ErrorNumber::ESPIPE;
+        return match fd_pipe {
+            Pipe::Stdin => ErrorNumber::EOPNOTSUPP,
+            Pipe::Stdout => unsafe { write_stdout(fd, iovs, iovs_len, nwritten) },
+            Pipe::Stderr => unsafe { write_stderr(fd, iovs, iovs_len, nwritten) }
+        };
     }
 
     let mut fs = GLOBAL_FS.lock().unwrap();
@@ -621,7 +645,7 @@ pub extern "C" fn internal_fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32,
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -652,7 +676,7 @@ pub extern "C" fn path_filestat_get(parent_fd: i32,
     path_len: i32,
     result: *mut FileStat) -> ErrorNumber
 {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -690,7 +714,7 @@ pub extern "C" fn path_filestat_set_times(
     mtim: Timestamp,
     fst_flags: FstFlags,
 ) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -726,10 +750,10 @@ pub extern "C" fn path_link(
     new_path: *const u8,
     new_path_len: i32
 ) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(old_parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(old_parent_fd) {
         return ErrorNumber::ESPIPE;
     }
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -787,7 +811,7 @@ pub extern "C" fn path_open(
     fdflags: FdFlags,
     res: *mut FileDescriptorID
 ) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -824,7 +848,7 @@ pub extern "C" fn path_readlink(
     buf_len: i32,
     buf_used: *mut usize,
 ) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -852,7 +876,7 @@ pub extern "C" fn path_readlink(
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn path_remove_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -886,11 +910,11 @@ pub extern "C" fn path_rename(old_parent_fd: i32,
     new_path: *const u8,
     new_path_len: i32)
     -> ErrorNumber {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(old_parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(old_parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(new_parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -932,11 +956,11 @@ pub extern "C" fn path_symlink(
     new_path: *const u8,
     new_path_len: i32) -> ErrorNumber
 {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 
@@ -967,7 +991,7 @@ pub extern "C" fn path_unlink_file(parent_fd: i32,
     path: *const u8,
     path_len: i32) -> ErrorNumber
 {
-    if let Some(fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
+    if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
 

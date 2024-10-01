@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 
 //use serde::{Serialize, Deserialize};
 use crate::marshall::*;
@@ -12,7 +13,43 @@ use crate::wasi::clock_time_get;
 
 use crate::v9p::*;
 
-// -------------------------------------------------
+// ----------------------------
+pub const P9_LOCK_TYPE_RDLCK : i32 = 0;
+pub const P9_LOCK_TYPE_WRLCK : i32 = 1;
+pub const P9_LOCK_TYPE_UNLCK : i32 = 2;
+//pub const P9_LOCK_TYPES:  [&str; 3] = ["shared", "exclusive", "unlock"];
+
+pub type Number = u64;
+
+pub const P9_SETATTR_MODE : Number = 0x00000001;
+pub const P9_SETATTR_UID : Number = 0x00000002;
+pub const P9_SETATTR_GID : Number = 0x00000004;
+pub const P9_SETATTR_SIZE : Number = 0x00000008;
+pub const P9_SETATTR_ATIME : Number = 0x00000010;
+pub const P9_SETATTR_MTIME : Number = 0x00000020;
+pub const P9_SETATTR_CTIME : Number = 0x00000040;
+pub const P9_SETATTR_ATIME_SET : Number = 0x00000080;
+pub const P9_SETATTR_MTIME_SET : Number = 0x00000100;
+
+pub const P9_STAT_MODE_DIR : Number = 0x80000000;
+pub const P9_STAT_MODE_APPEND : Number = 0x40000000;
+pub const P9_STAT_MODE_EXCL : Number = 0x20000000;
+pub const P9_STAT_MODE_MOUNT : Number = 0x10000000;
+pub const P9_STAT_MODE_AUTH : Number = 0x08000000;
+pub const P9_STAT_MODE_TMP : Number = 0x04000000;
+pub const P9_STAT_MODE_SYMLINK : Number = 0x02000000;
+pub const P9_STAT_MODE_LINK : Number = 0x01000000;
+pub const P9_STAT_MODE_DEVICE : Number = 0x00800000;
+pub const P9_STAT_MODE_NAMED_PIPE : Number = 0x00200000;
+pub const P9_STAT_MODE_SOCKET : Number = 0x00100000;
+pub const P9_STAT_MODE_SETUID : Number = 0x00080000;
+pub const P9_STAT_MODE_SETGID : Number = 0x00040000;
+pub const P9_STAT_MODE_SETVTX : Number = 0x00010000;
+
+
+
+//pub const P9_LOCK_FLAGS_BLOCK : i32 = 1;
+//pub const P9_LOCK_FLAGS_RECLAIM : i32 = 2;---------------------
 // ----------------- FILESYSTEM---------------------
 // -------------------------------------------------
 // Implementation of a unix filesystem in memory.
@@ -593,9 +630,8 @@ impl FS {
 
     pub fn seconds_since_epoch() -> u64 {
         let mut nanoseconds_time : u64 = 0;
-        let res = unsafe { clock_time_get(CLOCK_REALTIME, 1_000_000_000, (&mut nanoseconds_time) as *mut u64) };
-        return nanoseconds_time / 1_000_000_000;
-        
+        let _errornum = unsafe { clock_time_get(CLOCK_REALTIME, 1_000_000_000, (&mut nanoseconds_time) as *mut u64) };
+        return nanoseconds_time / 1_000_000_000        
         /*
         let start = SystemTime::now();
         let since_the_epoch = start
@@ -1104,7 +1140,8 @@ impl FS {
             size += mount_info.fs.get_space();
         }
         // Typo? I think this should be size?
-        return self.total_size;
+        //return self.total_size;
+        return size;
     }
     /**
      * XXX: Not ideal.
@@ -1517,12 +1554,12 @@ impl FS {
         }
     }
     
-    pub fn notify_listeners(&self, id: INodeID, action: &str) {
+    pub fn notify_listeners(&self, _id: INodeID, _action: &str) {
 
     }
 
     /** @param {*=} info */
-    pub fn notify_listeners_with_info(&self, id: INodeID, action: &str, info: NotifyInfo) {
+    pub fn notify_listeners_with_info(&self, _id: INodeID, _action: &str, _info: NotifyInfo) {
         //if(info==undefined)
         //    info = {};
 
@@ -2245,8 +2282,13 @@ impl FS {
             return None;
         }
 
-        let dir = self.get_inode(p.id.unwrap());
+        Some(self.read_dir_from_inode(p.id.unwrap()))
+    }
 
+    pub fn read_dir_from_inode(&mut self, inode : INodeID) -> Vec<String> {
+
+        let dir = self.get_inode(inode);
+        
         let mut result : Vec<String> = Vec::new();
 
         for key in dir.direntries.keys() {
@@ -2254,7 +2296,8 @@ impl FS {
                 result.push(key.clone());
             }
         }
-        return Some(result);
+
+        result
     }
 
     pub fn read_text_file(&mut self, file : &str) -> Option<String> {

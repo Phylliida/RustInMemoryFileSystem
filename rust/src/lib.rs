@@ -1,9 +1,3 @@
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
-use crate::v9p::Virtio9p;
-use crate::wasi::{set_panic_hook, wasi_print_internal};
-use crate::wasi::Pipe::Stdout;
 
 // TODO: STATUS_ON_STORAGE STUFF (local filestorage? can't in pure wasm)
 // TODO: clone_me rename to clone once I'm done with porting (For Uint8Array)
@@ -15,10 +9,16 @@ mod v9p;
 mod wasi;
 
 
+/*
+
+use crate::v9p::Virtio9p;
+use crate::wasi::{set_panic_hook, wasi_print_internal};
+use crate::wasi::Pipe::Stdout;
 
 #[no_mangle]
 pub extern "C" fn main() {
     set_panic_hook();
+    /*
     wasi_print!("hi!");
     let mut fs = Virtio9p::new(None);
     let path = "bees.bepis";
@@ -40,6 +40,6 @@ pub extern "C" fn main() {
     else {
         println!("got no text 2");
     }
-    
+    */
 } 
-
+*/
