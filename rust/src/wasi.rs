@@ -11,19 +11,14 @@ pub type ClockID = u32;
 pub type Timestamp = u64;
 
 
-#[link(wasm_import_module = "iostream")]
-extern "C" {
-    // needed for stdin/stdout/stderr (mostly, for panic to be able to print)
-    // pub fn fd_write(fd: Fd, iovs_ptr: *const Ciovec, iovs_len: Size, nwritten: *mut Size) -> ErrorNumber;
-    pub fn read_stdin(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber;
-    pub fn write_stdout(fd: i32, iovs_ptr: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber;
-    pub fn write_stderr(fd: i32, iovs_ptr: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber;
-}
-
 #[link(wasm_import_module = "wasi_snapshot_preview1")]
 extern "C" {
     // needed to set file times
     pub fn clock_time_get(clock_id: ClockID, precision: Timestamp, time: *mut Timestamp) -> ErrorNumber;
+    // needed for stdout/stderr (mostly, for panic to be able to print)
+    pub fn fd_write(fd: i32, iovs_ptr: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber;
+    // needed for stdin
+    pub fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber;
 }
 
 
@@ -95,8 +90,8 @@ pub fn wasi_print_internal(pipe : Pipe, msg: &String) -> ErrorNumber {
     let mut nwritten = 0;
     match pipe {
         Pipe::Stdin => ErrorNumber::EOPNOTSUPP,
-        Pipe::Stdout => unsafe { write_stdout(pipe as i32, ciovecs.as_ptr(), ciovecs.len() as i32, &mut nwritten) },
-        Pipe::Stderr => unsafe { write_stderr(pipe as i32, ciovecs.as_ptr(), ciovecs.len() as i32, &mut nwritten) }
+        Pipe::Stdout => unsafe { fd_write(pipe as i32, ciovecs.as_ptr(), ciovecs.len() as i32, &mut nwritten) },
+        Pipe::Stderr => unsafe { fd_write(pipe as i32, ciovecs.as_ptr(), ciovecs.len() as i32, &mut nwritten) }
     }
 }
 
@@ -183,7 +178,7 @@ pub extern "C" fn fd_advise(fd: i32, _offset: i64, _len: i64, _advice: i32) -> E
 // len: The length from the offset marking the end of the allocation.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
     if offset < 0 || len <= 0 {
         return ErrorNumber::EINVAL;
     }
@@ -203,7 +198,7 @@ pub extern "C" fn fd_allocate(fd: i32, offset: i64, len: i64) -> ErrorNumber {
 /// Note: This is similar to `close` in POSIX.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_close(fd: i32) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::SUCCESS // ignore closing pipes, technically this is undefined behavior but it's ok
     }
@@ -220,7 +215,7 @@ pub extern "C" fn fd_close(fd: i32) -> ErrorNumber {
 /// Note: This is similar to `fdatasync` in POSIX.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_datasync(fd: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_datasync(fd: i32) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         ErrorNumber::SUCCESS // also does nothing for pipes
     } else if let Some(_fd_file) = GLOBAL_FS.lock().unwrap().get_fd(fd) {
@@ -242,7 +237,7 @@ pub extern "C" fn fd_datasync(fd: i32) -> ErrorNumber {
 // buf_ptr: A WebAssembly pointer to a memory location where the metadata will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         let stat = unsafe { &mut *buf_ptr };
         stat.fs_filetype = FdFileType::CharacterDevice; // streams are character devices
@@ -269,7 +264,7 @@ pub extern "C" fn fd_fdstat_get(fd: i32, buf_ptr: *mut FdStat) -> ErrorNumber {
 // flags: The flags to apply to the file descriptor.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set flags on pipe
     }
@@ -289,7 +284,7 @@ pub extern "C" fn fd_fdstat_set_flags(fd: i32, flags: FdFlags) -> ErrorNumber {
 // fs_rights_inheriting: The inheriting rights to apply to the file descriptor.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rights_inheriting: FdRights) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
@@ -305,7 +300,7 @@ pub extern "C" fn fd_fdstat_set_rights(fd: i32, fs_rights_base: FdRights, fs_rig
 /// Return the attributes of an open file.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
@@ -323,7 +318,7 @@ pub extern "C" fn fd_filestat_get(fd: i32, stat: *mut FileStat) -> ErrorNumber {
 /// Note: This is similar to `ftruncate` in POSIX.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set rights on pipe
     }
@@ -344,7 +339,7 @@ pub extern "C" fn fd_filestat_set_size(fd: i32, size: i64) -> ErrorNumber {
 // fst_flags: A bit-vector that controls which times to set.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Timestamp, fst_flags: FstFlags) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE; // can't set time on pipe
     }
@@ -367,7 +362,7 @@ pub extern "C" fn fd_filestat_set_times(fd: i32, st_atim: Timestamp, st_mtim: Ti
 // nread: A pointer to store the number of bytes read.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut usize) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nread: *mut usize) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::EOPNOTSUPP; // we don't support pread for pipe
     }
@@ -390,7 +385,7 @@ pub extern "C" fn fd_pread(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: 
 // buf: A pointer to a Prestat structure where the metadata will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -409,7 +404,7 @@ pub extern "C" fn fd_prestat_get(fd: i32, buf : *mut PreStat) -> ErrorNumber {
 // max_len: The maximum length of the buffer.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -432,7 +427,7 @@ pub extern "C" fn fd_prestat_dir_name(fd: i32, path: *mut u8, max_len: i32) -> E
 // nwritten: A pointer to store the number of bytes written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nwritten: *mut usize) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset: i64, nwritten: *mut usize) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::EOPNOTSUPP; // we don't support pwrite for iostream
     }
@@ -457,10 +452,11 @@ pub extern "C" fn fd_pwrite(fd: i32, iovs: *const Ciovec, iovs_len: i32, offset:
 // nread: A pointer to store the number of bytes read.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *mut usize) -> ErrorNumber {
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return match fd_pipe {
-            Pipe::Stdin => unsafe { read_stdin(fd, iovs, iovs_len, nread) },
+            // we forward this to standard wasi
+            Pipe::Stdin => unsafe { fd_read(fd, iovs, iovs_len, nread) },
             Pipe::Stdout => ErrorNumber::EOPNOTSUPP,
             Pipe::Stderr => ErrorNumber::EOPNOTSUPP
         };
@@ -493,7 +489,7 @@ pub extern "C" fn fd_read(fd: i32, iovs: *const Ciovec, iovs_len: i32, nread: *m
 // bufused: A pointer to store the number of bytes stored in the buffer.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_readdir(fd: i32, buf: *mut DirectoryEntry, buf_len: i32, cookie: i64, bufused: *mut usize) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_readdir(fd: i32, buf: *mut DirectoryEntry, buf_len: i32, cookie: i64, bufused: *mut usize) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -526,7 +522,7 @@ pub extern "C" fn fd_readdir(fd: i32, buf: *mut DirectoryEntry, buf_len: i32, co
 // to: The location to copy the file descriptor to.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_renumber(from: i32, to: i32) -> ErrorNumber {
     if let Some(_fd_pipe_from) = Virtio9p::get_pipe_fd(from) {
         return ErrorNumber::ESPIPE; // what are u doing
     }
@@ -555,7 +551,7 @@ pub extern "C" fn fd_renumber(from: i32, to: i32) -> ErrorNumber {
 // newoffset: A WebAssembly memory pointer where the new offset will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *mut usize) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *mut usize) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -574,7 +570,7 @@ pub extern "C" fn fd_seek(fd: i32, offset: i64, whence: SeekWhence, newoffset: *
 // fd: The file descriptor to sync.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_sync(fd: i32) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -592,7 +588,7 @@ pub extern "C" fn fd_sync(fd: i32) -> ErrorNumber {
 // offset: A wasm pointer to a Filesize where the offset will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
+pub extern "C" fn __fs_custom_fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -614,12 +610,13 @@ pub extern "C" fn fd_tell(fd: i32, offset: *mut usize) -> ErrorNumber {
 // nwritten: A wasm pointer to an M::Offset value where the number of bytes written will be written.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber{
+pub extern "C" fn __fs_custom_fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32, nwritten: *mut usize) -> ErrorNumber{
     if let Some(fd_pipe) = Virtio9p::get_pipe_fd(fd) {
         return match fd_pipe {
             Pipe::Stdin => ErrorNumber::EOPNOTSUPP,
-            Pipe::Stdout => unsafe { write_stdout(fd, iovs, iovs_len, nwritten) },
-            Pipe::Stderr => unsafe { write_stderr(fd, iovs, iovs_len, nwritten) }
+            // we forward this to standard WASI
+            Pipe::Stdout => unsafe { fd_write(fd, iovs, iovs_len, nwritten) },
+            Pipe::Stderr => unsafe { fd_write(fd, iovs, iovs_len, nwritten) }
         };
     }
 
@@ -644,7 +641,7 @@ pub extern "C" fn fd_write(fd: i32, iovs: *const Ciovec, iovs_len: i32, nwritten
 // path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_path_create_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -670,7 +667,7 @@ pub extern "C" fn path_create_directory(parent_fd: i32, path: *const u8, path_le
 // result: A wasm pointer to a Filestat object where the metadata will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_filestat_get(parent_fd: i32,
+pub extern "C" fn __fs_custom_path_filestat_get(parent_fd: i32,
     symlink_flags: SymlinkLookupFlags,
     path: *const u8,
     path_len: i32,
@@ -705,7 +702,7 @@ pub extern "C" fn path_filestat_get(parent_fd: i32,
 // fst_flags: A bitmask controlling which attributes are set.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_filestat_set_times(
+pub extern "C" fn __fs_custom_path_filestat_set_times(
     parent_fd: i32,
     symlink_flags: SymlinkLookupFlags,
     path: *const u8,
@@ -741,7 +738,7 @@ pub extern "C" fn path_filestat_set_times(
 // new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_link(
+pub extern "C" fn __fs_custom_path_link(
     old_parent_fd: i32,
     old_flags: SymlinkLookupFlags,
     old_path: *const u8,
@@ -798,7 +795,7 @@ pub extern "C" fn path_link(
 // fd: A wasm pointer to a WasiFd variable where the new file descriptor will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_open(
+pub extern "C" fn __fs_custom_path_open(
     parent_fd: i32,
     parent_fd_flags: SymlinkLookupFlags,
     path: *const u8,
@@ -840,7 +837,7 @@ pub extern "C" fn path_open(
 // buf_used: A wasm pointer to a variable where the number of bytes written to the buffer will be stored.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_readlink(
+pub extern "C" fn __fs_custom_path_readlink(
     parent_fd: i32,
     path: *const u8,
     path_len: i32,
@@ -875,7 +872,7 @@ pub extern "C" fn path_readlink(
 // path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_remove_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
+pub extern "C" fn __fs_custom_path_remove_directory(parent_fd: i32, path: *const u8, path_len: i32) -> ErrorNumber {
     if let Some(_fd_pipe) = Virtio9p::get_pipe_fd(parent_fd) {
         return ErrorNumber::ESPIPE;
     }
@@ -903,7 +900,7 @@ pub extern "C" fn path_remove_directory(parent_fd: i32, path: *const u8, path_le
 // new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_rename(old_parent_fd: i32,
+pub extern "C" fn __fs_custom_path_rename(old_parent_fd: i32,
     old_path: *const u8,
     old_path_len: i32,
     new_parent_fd: i32,
@@ -949,7 +946,7 @@ pub extern "C" fn path_rename(old_parent_fd: i32,
 // new_path_len: The length of the new_path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_symlink(
+pub extern "C" fn __fs_custom_path_symlink(
     old_path: *const u8,
     old_path_len: i32,
     parent_fd: i32,
@@ -987,7 +984,7 @@ pub extern "C" fn path_symlink(
 // path_len: The length of the path string.
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn path_unlink_file(parent_fd: i32,
+pub extern "C" fn __fs_custom_path_unlink_file(parent_fd: i32,
     path: *const u8,
     path_len: i32) -> ErrorNumber
 {
